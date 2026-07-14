@@ -1,9 +1,10 @@
-from graphinglib import __version__
-from glob import glob
-from os.path import split, join, exists
+import json
 from collections import defaultdict
+from glob import glob
+from os.path import exists, join, split
 from github import Github
 
+from graphinglib import __version__
 
 RELEASE_NOTES_INDEX_TEMPLATE = """
 .. _release_notes:
@@ -26,6 +27,7 @@ GraphingLib {version2} Release Notes
 TAGS = [
     "new_feature",
     "improvement",
+    "bugfix",
     "compatibility",
     "deprecation",
     "expired",
@@ -35,6 +37,7 @@ TAGS = [
 TAGS_TO_SECTIONS = {
     "new_feature": "New Features",
     "improvement": "Improvements",
+    "bugfix": "Bug Fixes",
     "compatibility": "Compatibility Changes",
     "deprecation": "Deprecations",
     "expired": "Expired Deprecations",
@@ -44,10 +47,7 @@ TAGS_TO_SECTIONS = {
 
 # Function to parse version number and return a tuple of integers
 def parse_version(version):
-    if "dev" in version:
-        return tuple(map(int, version.rstrip(".dev").lstrip("v").split(".")))
-    else:
-        return tuple(map(int, version.lstrip("v").split(".")))
+    return tuple(map(int, version.rstrip(".dev").lstrip("v").split(".")))
 
 
 def order_versions(version_numbers):
@@ -86,8 +86,10 @@ def fetch_new_files(path):
         sorted_upcoming[tag] = sorted_upcoming.get(tag, [])
         sorted_upcoming[tag].append(prnbr)
         pr_list.append(prnbr)
+    for tag in sorted_upcoming.keys():
+        sorted_upcoming[tag].sort()
     pr_list.sort()
-    return sorted_upcoming, pr_list
+    return sorted_upcoming, set(pr_list)
 
 
 def get_highlights(path):
@@ -100,19 +102,69 @@ def get_highlights(path):
     return None
 
 
-def get_github_info(pr_list):
+def get_github_info(pr_set):
     g = Github()
+    if g.get_rate_limit().rate.remaining == 0:
+        raise RuntimeError("Github API rate limit exceeded")
     org = g.get_organization("GraphingLib")
     repo = org.get_repo("GraphingLib")
     pr_dict = {}
-    contrib_dict = {}
-    for pr in pr_list:
+    contrib_set = set()
+    for pr in pr_set:
+        if g.get_rate_limit().rate.remaining == 0:
+            raise RuntimeError("Github API rate limit exceeded")
         pull = repo.get_pull(int(pr))
         pr_dict[pull.title] = pr
         commits = pull.get_commits()
         for c in commits:
-            contrib_dict[c.author.login] = None
-    return pr_dict, contrib_dict
+            contrib_set.add(c.author.login)
+    return pr_dict, contrib_set
+
+
+def load_github_cache(cache_path):
+    with open(cache_path, "r") as file:
+        in_dict = json.load(file)
+    return in_dict
+
+
+def update_github_cache(pr_dict, contrib_set, cache_path):
+    current_ver = __version__.rstrip(".dev")
+    if not exists(cache_path) or ".dev" in __version__:
+        out_dict = {current_ver: {"prs": pr_dict, "contrib_set": list(contrib_set)}}
+    else:
+        in_dict = load_github_cache(cache_path)
+        if current_ver not in in_dict.keys():
+            in_dict.update(
+                {current_ver: {"prs": pr_dict, "contrib_set": list(contrib_set)}}
+            )
+            out_dict = in_dict
+        else:
+            in_dict[current_ver].update(
+                {"prs": pr_dict, "contrib_set": list(contrib_set)}
+            )
+            out_dict = in_dict
+    with open(cache_path, "w") as file:
+        json.dump(out_dict, file)
+
+
+def github_update_needed(pr_set, cache_path):
+    if not exists(cache_path):
+        print("cache does not exist")
+        return pr_set
+    current_ver = __version__.rstrip(".dev")
+    in_dict = load_github_cache(cache_path)
+    if current_ver not in in_dict.keys():
+        print("cache for version {} does not exist".format(current_ver))
+        return pr_set
+    pr_dict = in_dict[current_ver]["prs"]
+    to_fetch = [i for i in pr_set if i not in list(pr_dict.values())]
+    return to_fetch
+
+
+class ReleaseNoteEntry:
+    def __init__(self, title, contents):
+        self.title = title
+        self.contents = contents
 
 
 class ReleaseNoteGenerator:
@@ -120,15 +172,50 @@ class ReleaseNoteGenerator:
         with open(path, "r") as f:
             lines = f.readlines()
             f.close()
-        self.title = lines[0]
-        self.contents = lines[2:]
+        self.entries = self._parse_entries(lines)
+
+    @staticmethod
+    def _is_heading(lines, idx):
+        if idx + 1 >= len(lines):
+            return False
+        title_line = lines[idx].strip()
+        underline_line = lines[idx + 1].strip()
+        if not title_line or not underline_line:
+            return False
+        if len(underline_line) < len(title_line):
+            return False
+        return len(set(underline_line)) == 1
+
+    def _parse_entries(self, lines):
+        entries = []
+        idx = 0
+        while idx < len(lines):
+            while idx < len(lines) and lines[idx].strip() == "":
+                idx += 1
+            if idx >= len(lines) or not self._is_heading(lines, idx):
+                break
+
+            title = lines[idx]
+            idx += 2  # Skip title and underline
+            start = idx
+
+            while idx < len(lines) and not self._is_heading(lines, idx):
+                idx += 1
+
+            entries.append(ReleaseNoteEntry(title, lines[start:idx]))
+
+        if not entries and lines:
+            entries.append(ReleaseNoteEntry(lines[0], lines[2:]))
+
+        return entries
 
 
 def main(app):
     old_v_path = join(app.builder.srcdir, "release_notes", "old_release_notes")
     upcoming_path = join(app.builder.srcdir, "release_notes", "upcoming_changes")
     target_path = join(app.builder.srcdir, "release_notes")
-    upcoming, pr_list = fetch_new_files(upcoming_path)
+    cache_path = join(app.builder.srcdir, "release_notes", ".github_cache.json")
+    upcoming, pr_set = fetch_new_files(upcoming_path)
     output = RELEASE_NOTES_TEMPLATE.format(version1=__version__, version2=__version__)
 
     highlights = get_highlights(upcoming_path)
@@ -146,19 +233,33 @@ def main(app):
         for prn in upcoming[tag]:
             rn = ReleaseNoteGenerator(join(upcoming_path, f"{prn}.{tag}.rst"))
             pr_url = f"https://github.com/GraphingLib/GraphingLib/pull/{prn}"
-            output += rn.title + "^" * (len(rn.title) - 1) + "\n\n"
-            for line in rn.contents:
-                if line == "\n":
-                    continue
-                output += line + "\n"
-            output += f"\n(`pr-{prn} <{pr_url}>`_)\n\n"
+            for entry in rn.entries:
+                output += entry.title + "^" * (len(entry.title) - 1) + "\n\n"
+                for line in entry.contents:
+                    if line == "\n":
+                        continue
+                    output += line + "\n"
+                output += "\n"
+                output += f"(`pr-{prn} <{pr_url}>`_)\n\n"
 
-    pr_dict, contrib_dict = get_github_info(pr_list)
+    to_fetch = github_update_needed(pr_set, cache_path)
+    if to_fetch != []:
+        print("Github: Updating PR info")
+        pr_dict, contrib_set = get_github_info(to_fetch)
+        update_github_cache(pr_dict, contrib_set, cache_path)
+    else:
+        print("Github: No update needed")
+        cache_current_ver = load_github_cache(cache_path)[__version__.rstrip(".dev")]
+        pr_dict, contrib_set = (
+            cache_current_ver["prs"],
+            set(cache_current_ver["contrib_set"]),
+        )
+
     output += (
         "Contributors\n------------\n\n"
-        + f"A total of {len(contrib_dict)} people contributed to this release.\n\n"
+        + f"A total of {len(contrib_set)} people contributed to this release.\n\n"
     )
-    for contrib in contrib_dict.keys():
+    for contrib in contrib_set:
         output += f"* `@{contrib} <https://github.com/{contrib}>`_\n\n"
     output += (
         "Merged Pull Requests\n--------------------\n\n"
@@ -197,7 +298,7 @@ def main(app):
             if "dev" in v:
                 toctree += "   " + v.lstrip("v") + f" <{v}>\n"
             else:
-                toctree += "   " + v.lstrip("v") + f" <{'old_release_notes/'+v}>\n"
+                toctree += "   " + v.lstrip("v") + f" <{'old_release_notes/' + v}>\n"
         toctree += "\n"
 
     output = RELEASE_NOTES_INDEX_TEMPLATE.format(toctree=toctree)

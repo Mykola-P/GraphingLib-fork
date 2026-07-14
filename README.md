@@ -10,6 +10,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![PyPi downloads](https://img.shields.io/pypi/dm/graphinglib)](https://pypi.org/project/graphinglib/)
 ![GitHub stars](https://img.shields.io/github/stars/GraphingLib/GraphingLib.svg?style=social&label=Star&maxAge=2592000)
+[![DOI](https://zenodo.org/badge/613172394.svg)](https://zenodo.org/badge/latestdoi/613172394)
 
 # GraphingLib
 
@@ -31,8 +32,8 @@ GraphingLib has the following explicit goals:
 - **Curve Fitting:** Perform curve fitting with a single line of code.
 - **Curve Operations:** Carry out differentiation, integration, arithmetic, intersections, and other standard operations on Curve objects.
 - **GUI Style Editor:** Use the GraphingLib Style Editor to create and modify custom styles, and set them as your default style.
-- **MultiFigures:** Combine different Figure objects into one MultiFigure with one line of code.
 - **Polygon Manipulation:** Obtain useful information such as area, centroid, and perimeter of polygons, and manipulate them using transform and set operations methods.
+- **SmartFigures:** Create modular figures with multiple sub-figures and an intuitive syntax.
 
 ## Getting started
 
@@ -40,25 +41,37 @@ To get started with GraphingLib, check out our comprehensive [documentation and 
 
 From PyPI with
 
-```text
+```bash
 pip install graphinglib
 ```
 
 From source with
 
-```text
+```bash
 pip install git+https://github.com/GraphingLib/GraphingLib.git
 ```
 
 Using Poetry with
 
-```text
+```bash
 poetry add graphinglib
 ```
 
+Using `uv` with
+
+```bash
+uv add graphinglib
+```
+
+Optional extras:
+
+- Astronomical projections (SmartFigureWCS): install `pip install graphinglib[astro]`
+- Opening PDFs with Heatmap (`Heatmap.from_pdf`): install `pip install graphinglib[pdf]`
+
 ## Contributing
 
-We welcome contributions from the community. If you're interested in contributing to GraphingLib, please read our [contribution guidelines](https://www.graphinglib.org/en/stable/contributing.html) on our documentation website.
+We welcome contributions from the community. If you're interested in contributing to GraphingLib, please read our [contribution guidelines](https://graphinglib.org/latest/contributing/index.html) on our documentation website.
+
 
 ## Example
 Here is a short example showing how to use GraphingLib to create a figure with a scatter plot, a fit, and a histogram of the residuals.
@@ -75,27 +88,22 @@ y_data = 3 * x_data**2 - 2 * x_data + np.random.normal(0, 10, 100)
 # Create elements
 scatter = gl.Scatter(x_data, y_data, label="Position data")
 fit = gl.FitFromPolynomial(scatter, degree=2, label="Fit", color="red")
-residuals = gl.Histogram.from_fit_residuals(fit, number_of_bins=15)
+residuals = gl.Histogram.from_fit_residuals(fit, bins=15)
 residuals.add_pdf("normal")
 
-# Create and show figures
-fig1 = gl.Figure(
-    x_label="Time [s]",
-    y_label="Position [mm]",
-    title="Position as a function of time",
+# Create and show figure
+fig = gl.SmartFigure(
+    num_cols=2,
+    num_rows=1,
+    size=(10, 5),
+    y_lim=[None, (0, 0.06)],
+    sub_x_labels=["Time [s]", "Distance from fit [mm]"],
+    sub_y_labels=["Position [mm]", "Frequency [-]"],
+    subtitles=["Position as a function of time", "Histogram of fit residuals"],
 )
-fig1.add_elements(scatter, fit)
-
-fig2 = gl.Figure(
-    y_lim=(0, 0.06),
-    x_label="Distance from fit [mm]",
-    y_label="Frequency [-]",
-    title="Histogram of fit residuals",
-)
-fig2.add_elements(residuals)
-
-multifigure = gl.MultiFigure.from_row([fig1, fig2], size=(10, 5))
-multifigure.show()
+fig[0] = [scatter, fit]
+fig[1] = [residuals]
+fig.show()
 ```
 
 ![image](images/example_fit.svg)

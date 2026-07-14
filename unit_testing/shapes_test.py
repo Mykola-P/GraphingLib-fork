@@ -1,12 +1,14 @@
 import unittest
+from typing import Literal
 
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.colors import to_rgba
 
 from graphinglib.data_plotting_1d import Curve
-from graphinglib.graph_elements import Point
-from graphinglib.shapes import Arrow, Circle, Line, Polygon, Rectangle
+from graphinglib.shapes import Arrow, Circle, Ellipse, Line, Polygon, Rectangle
+
+ArrowStyle = Literal["->", "-|>", "-[", "]->", "simple", "fancy", "wedge"]
 
 
 class TestCircle(unittest.TestCase):
@@ -16,6 +18,185 @@ class TestCircle(unittest.TestCase):
         self.assertAlmostEqual(circle.area, np.pi, places=2)
         self.assertAlmostEqual(circle.perimeter, 2 * np.pi, places=2)
 
+    def test_init_invalid_radius(self):
+        with self.assertRaises(ValueError):
+            Circle(0, 0, 0)
+        with self.assertRaises(ValueError):
+            Circle(0, 0, -1)
+
+    def test_radius_setter_invalid(self):
+        circle = Circle(0, 0, 1)
+        with self.assertRaises(ValueError):
+            circle.radius = 0
+        with self.assertRaises(ValueError):
+            circle.radius = -1
+
+    def test_init_invalid_points(self):
+        with self.assertRaises(ValueError):
+            Circle(0, 0, 1, number_of_points=3)
+
+    def test_number_of_points_setter_invalid(self):
+        circle = Circle(0, 0, 1)
+        with self.assertRaises(ValueError):
+            circle.number_of_points = 3
+
+
+class TestEllipse(unittest.TestCase):
+    def test_init(self):
+        ellipse = Ellipse(2, 2, 2, 1)
+
+        self.assertAlmostEqual(ellipse.x_center, 2, places=2)
+        self.assertAlmostEqual(ellipse.y_center, 2, places=2)
+        self.assertAlmostEqual(ellipse.x_radius, 2, places=2)
+        self.assertAlmostEqual(ellipse.y_radius, 1, places=2)
+        self.assertAlmostEqual(ellipse.angle, 0, places=2)
+        self.assertAlmostEqual(ellipse.width, 4, places=2)
+        self.assertAlmostEqual(ellipse.height, 2, places=2)
+
+    def test_init_with_angle(self):
+        ellipse = Ellipse(0, 0, 2, 1, angle=45)
+
+        self.assertAlmostEqual(ellipse.angle, 45, places=2)
+
+    def test_init_invalid_radii(self):
+        with self.assertRaises(ValueError):
+            Ellipse(2, 2, -1, 1)
+
+        with self.assertRaises(ValueError):
+            Ellipse(2, 2, 1, -1)
+
+        with self.assertRaises(ValueError):
+            Ellipse(2, 2, 0, 1)
+
+    def test_init_invalid_points(self):
+        with self.assertRaises(ValueError):
+            Ellipse(2, 2, 1, 1, number_of_points=3)
+
+    def test_number_of_points_setter_invalid(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+        with self.assertRaises(ValueError):
+            ellipse.number_of_points = 3
+
+    def test_x_center_setter(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+        ellipse.x_center = 5
+
+        self.assertAlmostEqual(ellipse.x_center, 5, places=2)
+
+    def test_y_center_setter(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+        ellipse.y_center = 3
+
+        self.assertAlmostEqual(ellipse.y_center, 3, places=2)
+
+    def test_x_radius_setter(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+        ellipse.x_radius = 3
+
+        self.assertAlmostEqual(ellipse.x_radius, 3, places=2)
+        self.assertAlmostEqual(ellipse.width, 6, places=2)
+
+    def test_y_radius_setter(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+        ellipse.y_radius = 2
+
+        self.assertAlmostEqual(ellipse.y_radius, 2, places=2)
+        self.assertAlmostEqual(ellipse.height, 4, places=2)
+
+    def test_x_radius_setter_invalid(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+
+        with self.assertRaises(ValueError):
+            ellipse.x_radius = -1
+
+        with self.assertRaises(ValueError):
+            ellipse.x_radius = 0
+
+    def test_y_radius_setter_invalid(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+
+        with self.assertRaises(ValueError):
+            ellipse.y_radius = -1
+
+        with self.assertRaises(ValueError):
+            ellipse.y_radius = 0
+
+    def test_width_setter(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+        ellipse.width = 6
+
+        self.assertAlmostEqual(ellipse.width, 6, places=2)
+        self.assertAlmostEqual(ellipse.x_radius, 3, places=2)
+
+    def test_height_setter(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+        ellipse.height = 4
+
+        self.assertAlmostEqual(ellipse.height, 4, places=2)
+        self.assertAlmostEqual(ellipse.y_radius, 2, places=2)
+
+    def test_width_setter_invalid(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+
+        with self.assertRaises(ValueError):
+            ellipse.width = -1
+
+        with self.assertRaises(ValueError):
+            ellipse.width = 0
+
+    def test_height_setter_invalid(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+
+        with self.assertRaises(ValueError):
+            ellipse.height = -1
+
+        with self.assertRaises(ValueError):
+            ellipse.height = 0
+
+    def test_angle_setter(self):
+        ellipse = Ellipse(0, 0, 2, 1)
+        ellipse.angle = 30
+
+        self.assertAlmostEqual(ellipse.angle, 30, places=2)
+
+    def test_angle_rotation(self):
+        ellipse1 = Ellipse(0, 0, 2, 1, angle=0)
+        ellipse2 = Ellipse(0, 0, 2, 1, angle=45)
+
+        # Both ellipses should have the same area (shape shouldn't change on rotation)
+        self.assertAlmostEqual(ellipse1.area, ellipse2.area, places=1)
+
+    def test_copy(self):
+        ellipse = Ellipse(2, 3, 2, 1, fill_color="red", edge_color="blue", angle=45)
+        ellipse_copy = ellipse.copy()
+
+        self.assertAlmostEqual(ellipse_copy.x_center, ellipse.x_center, places=2)
+        self.assertAlmostEqual(ellipse_copy.y_center, ellipse.y_center, places=2)
+        self.assertAlmostEqual(ellipse_copy.x_radius, ellipse.x_radius, places=2)
+        self.assertAlmostEqual(ellipse_copy.y_radius, ellipse.y_radius, places=2)
+        self.assertAlmostEqual(ellipse_copy.angle, ellipse.angle, places=2)
+        self.assertEqual(ellipse_copy._fill_color, ellipse._fill_color)
+        self.assertEqual(ellipse_copy._edge_color, ellipse._edge_color)
+
+    def test_plotting(self):
+        ellipse = Ellipse(
+            2,
+            2,
+            2,
+            1,
+            fill=True,
+            fill_color="red",
+            fill_alpha=0.5,
+            edge_color="blue",
+            line_width=2,
+            line_style="-",
+            angle=30,
+        )
+
+        fig, ax = plt.subplots()
+        ellipse._plot_element(ax, 0)
+        plt.close(fig)
+
 
 class TestRectangle(unittest.TestCase):
     def test_init(self):
@@ -23,6 +204,27 @@ class TestRectangle(unittest.TestCase):
 
         self.assertAlmostEqual(rectangle.area, 1, places=2)
         self.assertAlmostEqual(rectangle.perimeter, 4, places=2)
+
+    def test_init_invalid_dimensions(self):
+        with self.assertRaises(ValueError):
+            Rectangle(0, 0, 0, 1)
+        with self.assertRaises(ValueError):
+            Rectangle(0, 0, 1, 0)
+        with self.assertRaises(ValueError):
+            Rectangle(0, 0, -1, 1)
+        with self.assertRaises(ValueError):
+            Rectangle(0, 0, 1, -1)
+
+    def test_setters_reject_non_positive_dimensions(self):
+        rectangle = Rectangle(0, 0, 1, 1)
+        with self.assertRaises(ValueError):
+            rectangle.width = 0
+        with self.assertRaises(ValueError):
+            rectangle.width = -1
+        with self.assertRaises(ValueError):
+            rectangle.height = 0
+        with self.assertRaises(ValueError):
+            rectangle.height = -1
 
 
 class TestArrow(unittest.TestCase):
@@ -34,6 +236,8 @@ class TestArrow(unittest.TestCase):
             width=2,
             head_size=3,
             shrink=0.1,
+            style="-|>",
+            alpha=0.4,
             two_sided=True,
         )
 
@@ -45,6 +249,8 @@ class TestArrow(unittest.TestCase):
         self.assertEqual(arrow._width, 2)
         self.assertEqual(arrow._head_size, 3)
         self.assertEqual(arrow._shrink, 0.1)
+        self.assertEqual(arrow._style, "-|>")
+        self.assertEqual(arrow._alpha, 0.4)
         self.assertEqual(arrow._two_sided, True)
 
     def test_shrink_points(self):
@@ -92,6 +298,71 @@ class TestArrow(unittest.TestCase):
         self.assertEqual(shrinkedB[0], 3.4)
         self.assertEqual(shrinkedB[1], 3.4)
 
+    def test_styles(self):
+        valid_styles: list[ArrowStyle] = [
+            "->",
+            "-|>",
+            "-[",
+            "]->",
+            "simple",
+            "fancy",
+            "wedge",
+        ]
+        for style in valid_styles:
+            arrow = Arrow(
+                pointA=(0, 0),
+                pointB=(1, 1),
+                color="blue",
+                width=3,
+                head_size=1,
+                style=style,
+                alpha=1,
+            )
+            self.assertEqual(arrow._style, style)
+        with self.assertRaises(ValueError):
+            Arrow(
+                pointA=(0, 0),
+                pointB=(1, 1),
+                color="blue",
+                width=3,
+                style="<->",  # ty: ignore[invalid-argument-type]  # deliberately invalid
+            )
+
+        # Check errors at plotting time
+        _, ax = plt.subplots()
+        valid_two_sided_styles: list[Literal["->", "-|>", "-["]] = ["->", "-|>", "-["]
+        for style in valid_two_sided_styles:
+            arrow = Arrow(
+                pointA=(0, 0),
+                pointB=(1, 1),
+                color="blue",
+                width=3,
+                head_size=1,
+                style=style,
+                two_sided=True,
+                alpha=1,
+            )
+            arrow._plot_element(ax, 0)
+        invalid_two_sided_styles: list[ArrowStyle] = [
+            "]->",
+            "simple",
+            "fancy",
+            "wedge",
+        ]
+        for style in invalid_two_sided_styles:
+            arrow = Arrow(
+                pointA=(0, 0),
+                pointB=(1, 1),
+                color="blue",
+                width=3,
+                head_size=1,
+                style=style,
+                two_sided=True,
+                alpha=1,
+            )
+            with self.assertRaises(ValueError):
+                arrow._plot_element(ax, 0)
+
     def test_plotting(self):
         arrow = Arrow(
             pointA=(3, 3),
@@ -100,7 +371,9 @@ class TestArrow(unittest.TestCase):
             width=2,
             head_size=3,
             shrink=0.1,
-            two_sided=True,
+            style="fancy",
+            alpha=1.0,
+            two_sided=False,
         )
 
         _, ax = plt.subplots()
@@ -112,6 +385,7 @@ class TestArrow(unittest.TestCase):
                 self.assertEqual(child.xyann, (3.1, 3.1))
                 self.assertEqual(child.arrow_patch.get_edgecolor(), to_rgba("blue"))
                 self.assertEqual(child.arrow_patch.get_linewidth(), 2)
+                self.assertEqual(child.arrow_patch.get_alpha(), 1.0)
         plt.close()
 
     def test_copy(self):
@@ -122,6 +396,8 @@ class TestArrow(unittest.TestCase):
             width=2,
             head_size=3,
             shrink=0.1,
+            style="-[",
+            alpha=0.85,
             two_sided=True,
         )
         arrow_copy = arrow.copy()
@@ -131,6 +407,8 @@ class TestArrow(unittest.TestCase):
         self.assertEqual(arrow._width, arrow_copy._width)
         self.assertEqual(arrow._head_size, arrow_copy._head_size)
         self.assertEqual(arrow._shrink, arrow_copy._shrink)
+        self.assertEqual(arrow._style, arrow_copy._style)
+        self.assertEqual(arrow._alpha, arrow_copy._alpha)
         self.assertEqual(arrow._two_sided, arrow_copy._two_sided)
 
 
@@ -143,6 +421,7 @@ class TestLine(unittest.TestCase):
             width=2,
             capped_line=True,
             cap_width=3,
+            alpha=0.2,
         )
 
         self.assertEqual(line._pointA[0], 3)
@@ -153,6 +432,7 @@ class TestLine(unittest.TestCase):
         self.assertEqual(line._width, 2)
         self.assertEqual(line._capped_line, True)
         self.assertEqual(line._cap_width, 3)
+        self.assertEqual(line._alpha, 0.2)
 
     def test_plotting(self):
         line = Line(
@@ -162,6 +442,7 @@ class TestLine(unittest.TestCase):
             width=2,
             capped_line=True,
             cap_width=3,
+            alpha=1.0,
         )
 
         _, ax = plt.subplots()
@@ -183,6 +464,7 @@ class TestLine(unittest.TestCase):
             width=2,
             capped_line=True,
             cap_width=3,
+            alpha=0.3,
         )
         line_copy = line.copy()
         self.assertEqual(line._pointA, line_copy._pointA)
@@ -191,6 +473,7 @@ class TestLine(unittest.TestCase):
         self.assertEqual(line._width, line_copy._width)
         self.assertEqual(line._capped_line, line_copy._capped_line)
         self.assertEqual(line._cap_width, line_copy._cap_width)
+        self.assertEqual(line._alpha, line_copy._alpha)
 
 
 class TestPolygon(unittest.TestCase):
@@ -335,6 +618,42 @@ class TestPolygon(unittest.TestCase):
         self.assertListEqual(list(difference.vertices[4]), list((0.5, 0.5)))
         self.assertListEqual(list(difference.vertices[5]), list((1, 0.5)))
         self.assertListEqual(list(difference.vertices[6]), list((1, 0)))
+
+    def test_create_symmetric_difference(self):
+        # Two rectangles overlapping in a cross: the symmetric difference is a
+        # MultiPolygon with four disjoint pieces.
+        vertices_1 = [(0, 0), (4, 0), (4, 2), (0, 2), (0, 0)]
+        vertices_2 = [(1, -1), (3, -1), (3, 3), (1, 3), (1, -1)]
+        polygon_1 = Polygon(vertices_1, line_width=2)
+        polygon_2 = Polygon(vertices_2, line_width=2)
+
+        pieces = polygon_1.create_symmetric_difference(polygon_2)
+
+        self.assertEqual(len(pieces), 4)
+        for piece in pieces:
+            self.assertIsInstance(piece, Polygon)
+            # Each piece must be a plain polygon whose geometry is usable.
+            self.assertEqual(piece._sh_polygon.geom_type, "Polygon")
+            self.assertGreater(len(piece.vertices), 0)
+        total_area = sum(piece.area for piece in pieces)
+        self.assertAlmostEqual(total_area, 4 + 4, places=6)
+
+    def test_create_symmetric_difference_copy_style(self):
+        # Regression test: copy_style=True used to wrap the raw MultiPolygon in a
+        # single Polygon, whose vertices/area then crashed with AttributeError.
+        vertices_1 = [(0, 0), (4, 0), (4, 2), (0, 2), (0, 0)]
+        vertices_2 = [(1, -1), (3, -1), (3, 3), (1, 3), (1, -1)]
+        polygon_1 = Polygon(vertices_1, line_width=7, fill_color="red")
+        polygon_2 = Polygon(vertices_2, line_width=2)
+
+        pieces = polygon_1.create_symmetric_difference(polygon_2, copy_style=True)
+
+        self.assertEqual(len(pieces), 4)
+        for piece in pieces:
+            self.assertEqual(piece._sh_polygon.geom_type, "Polygon")
+            self.assertGreater(len(piece.vertices), 0)
+            self.assertEqual(piece._line_width, 7)
+            self.assertEqual(piece._fill_color, "red")
 
     def test_translate(self):
         vertices = [

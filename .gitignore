@@ -14,9 +14,7 @@ build
 
 .vscode
 .venv
-.github
 **/.DS_Store
-**/*.lock
 
 docs/_build
 docs/example_thumbs/*.png

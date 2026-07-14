@@ -1,9 +1,12 @@
 from os import listdir, mkdir, path, remove
+from typing import Literal, overload
 from warnings import warn
 
 import yaml
 from matplotlib import pyplot as plt
 from platformdirs import user_config_dir
+
+from .exceptions import InvalidParameterError, StyleFileError
 
 # Force yaml to ignore aliases when dumping
 yaml.Dumper.ignore_aliases = lambda *args: True  # type: ignore
@@ -43,7 +46,7 @@ class FileLoader:
         try:
             assert info is not None
         except AssertionError:
-            raise TypeError(
+            raise StyleFileError(
                 f"Could not load the file {self._file_name}.yml. Please check that the file is in the correct format."
             )
         return info
@@ -189,12 +192,30 @@ def get_color(figure_style: str = "plain", color_number: int = 0) -> str:
     return color
 
 
+@overload
+def get_styles(
+    customs: bool = True,
+    gl: bool = True,
+    matplotlib: bool = False,
+    as_dict: Literal[False] = False,
+) -> list[str]: ...
+
+
+@overload
+def get_styles(
+    customs: bool = True,
+    gl: bool = True,
+    matplotlib: bool = False,
+    as_dict: Literal[True] = True,
+) -> dict[str, list[str]]: ...
+
+
 def get_styles(
     customs: bool = True,
     gl: bool = True,
     matplotlib: bool = False,
     as_dict: bool = False,
-) -> list[str]:
+) -> list[str] | dict[str, list[str]]:
     """
     Returns a list or dict of available styles.
 
@@ -226,7 +247,9 @@ def get_styles(
         )
         if "custom_styles" in listdir(config_dir):
             customs_list = [
-                file.split(".")[0] for file in listdir(f"{config_dir}/custom_styles") if file.endswith(".yml")
+                file.split(".")[0]
+                for file in listdir(f"{config_dir}/custom_styles")
+                if file.endswith(".yml")
             ]
     if gl:
         gl_list = [
@@ -262,6 +285,11 @@ def get_default_style() -> str:
         appname="GraphingLib", roaming=True, ensure_exists=True
     )
     config_file = f"{config_dir}/config.yml"
+
+    # Ensure the config file exists to avoid FileNotFoundError when reading.
+    if not path.exists(config_file):
+        with open(config_file, "w"):
+            pass
 
     # If file exists, load the default style
     try:
@@ -316,7 +344,7 @@ def set_default_style(style: str) -> None:
     # Ensure the style exists
     available_styles = get_styles(matplotlib=True)
     if style not in available_styles + ["matplotlib"]:
-        raise ValueError(f"Style '{style}' does not exist.")
+        raise InvalidParameterError(f"Style '{style}' does not exist.")
 
     # Set the default style
     config_dir = user_config_dir(

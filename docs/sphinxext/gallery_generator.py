@@ -5,16 +5,17 @@ Lightly modified from the seaborn project.
 
 """
 
+import glob
 import os
 import os.path as op
 import re
-import glob
+import shutil
 import token
 import tokenize
-import shutil
 import warnings
 
 import matplotlib
+import matplotlib.image
 import numpy as np
 
 matplotlib.use("Agg")
@@ -202,7 +203,7 @@ def create_thumbnail(infile, thumbfile):
     dpi = 100
     fig = plt.figure(figsize=(new_width / dpi, new_height / dpi), dpi=dpi)
 
-    ax = fig.add_axes([0, 0, 1, 1], aspect="auto", frameon=False, xticks=[], yticks=[])
+    ax = fig.add_axes((0, 0, 1, 1), aspect="auto", frameon=False, xticks=[], yticks=[])
     if all(thumb.shape):
         ax.imshow(thumb, aspect="auto", resample=True, interpolation="bilinear")
     else:
@@ -330,7 +331,7 @@ class ExampleGenerator:
         if thumbloc is not None:
             self.thumbloc = thumbloc
             docstring = "\n".join(
-                [l for l in docstring.split("\n") if not l.startswith("_thumb")]
+                [li for li in docstring.split("\n") if not li.startswith("_thumb")]
             )
 
         self.docstring = docstring
@@ -395,12 +396,11 @@ def main(app):
 
     banner_data = []
 
-    toctree = "\n\n" ".. toctree::\n" "   :hidden:\n\n"
+    toctree = "\n\n.. toctree::\n   :hidden:\n\n"
     contents = "\n\n"
 
     # Write individual example files
     for filename in sorted(glob.glob(op.join(source_dir, "*.py"))):
-
         ex = ExampleGenerator(filename, target_dir)
 
         banner_data.append(

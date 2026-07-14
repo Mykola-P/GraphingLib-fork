@@ -18,7 +18,7 @@ GraphingLib has a number of built-in styles which are showcased at the bottom of
     fig2 = gl.Figure(figure_style="dark")
     fig2.set_visual_params(axes_edge_color="red") # "dark" style, but axes color is overridden
 
-If no style is specified, the user's default style is used. This default style can be set by the user using the `set_default_style` function or by using GraphingLib's Style Editor. Once set, the default style will be saved and used for all figures created without a specified style. The default style can also be retrieved using the `get_default_style` function.
+If no style is specified, the user's default style is used. This default style can be set by the user using the :py:func:`~graphinglib.set_default_style` function or by using GraphingLib's Style Editor. Once set, the default style will be saved and used for all figures created without a specified style. The default style can also be retrieved using the :py:func:`~graphinglib.get_default_style` function.
 
 .. plot::
 
@@ -28,7 +28,7 @@ If no style is specified, the user's default style is used. This default style c
 
 .. plot::
     :include-source: false
-    
+
     gl.set_default_style("plain")
 
 When you install GraphingLib for the first time, the default style is the "plain" style. You can also create your own styles or modify existing ones. To do this, you can use GraphingLib's Style Editor as described below.
@@ -51,6 +51,7 @@ To learn more about the Style Editor, you can check out the Style Editor documen
 
         Go to Style Editor Documentation
 
+.. _graphinglib_styles_showcase:
 
 GraphingLib Styles Showcase
 ---------------------------
@@ -123,15 +124,24 @@ Here are the currently available built-in styles in GraphingLib:
             "dark",
             "dim",
             "horrible",
+            "xkcd",
         ]:
             create_fig(style)
+
+.. note::
+
+    The ``xkcd`` style approximates matplotlib's ``plt.xkcd()`` hand-drawn look. It reproduces the
+    line wiggle, fonts and tick styling, but not the white outline drawn behind lines (which cannot
+    be expressed in a style file). For the full effect, install the "xkcd" or "Humor Sans" font;
+    without it, text falls back to a comic-style system font (such as Comic Sans MS) when one is
+    available, or the regular default font otherwise.
 
 Here is the code used to generate the above figures if you want to try it out with your own styles:
 
 .. code-block:: python
 
     import numpy as np
-    import graphing_lib as gl
+    import graphinglib as gl
 
     style = "plain" # Change this to the style you want to showcase
     colors = gl.get_colors(style)

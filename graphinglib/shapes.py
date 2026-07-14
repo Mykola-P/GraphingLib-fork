@@ -1,16 +1,26 @@
+from __future__ import annotations
+
+from .inherit import INHERIT, Inherit, resolve_or, strip_inherit
+
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
 import shapely as sh
+import shapely.affinity
 import shapely.ops as ops
 from matplotlib.patches import Polygon as MPLPolygon
 from shapely import LineString
 from shapely import Polygon as ShPolygon
 
 from .data_plotting_1d import Curve
+from .exceptions import (
+    IncompatibleArgumentsError,
+    InvalidParameterError,
+    InvalidParameterTypeError,
+)
 from .graph_elements import Plottable, Point
 
 try:
@@ -30,28 +40,54 @@ class Arrow(Plottable):
     pointB : tuple[float, float]
         Point B of the arrow. If the arrow is single-sided, refers to the head.
     color : str
-        Color of the arrow. Default depends on the ``figure_style`` configuration.
+        Color of the arrow.
+        Default depends on the ``figure_style`` configuration.
     width : float, optional
-        Arrow line width. Default depends on the ``figure_style`` configuration.
+        Arrow line width.
+        Typical range is ``0.5`` to ``4``.
+        Default depends on the ``figure_style`` configuration.
     head_size : float, optional
         Scales the size of the arrow head.
+        Typical range is ``0.5`` to ``3``.
         Default depends on the ``figure_style`` configuration.
+    style : ``Literal["->", "-|>", "-[", "]->", "simple", "fancy", "wedge"] | Inherit``, optional
+        The style of the arrow. For a visual explanation of all available styles, see the gallery
+        `Arrow Styles <https://graphinglib.org/latest/examples/arrow_styles.html>`_ example.
+        Values are ``"->"``, ``"-|>"``, ``"-["``, ``"]->"``, ``"simple"``, ``"fancy"``, and ``"wedge"``.
+        Default depends on the ``figure_style`` configuration.
+
+        .. warning::
+            The ``style`` parameter differs slightly from matplotlib's ``arrowstyle`` since GraphingLib also uses a
+            ``two_sided`` parameter to explicitly define whether the arrow is single or double-sided.
     shrink : float
         Fraction of the total length of the arrow to shrink from both ends.
-        A value of 0.5 means the arrow is no longer visible.
+        Range is ``0`` to ``0.5``. A value of ``0.5`` means the arrow is no longer visible.
         Defaults to 0.
+    alpha : float
+        Opacity of the arrow.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
     two_sided : bool
         If ``True``, an arrow is shown at both head and tail. Defaults to ``False``.
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
     """
 
     def __init__(
         self,
         pointA: tuple[float, float],
         pointB: tuple[float, float],
-        color: str = "default",
-        width: float | Literal["default"] = "default",
-        head_size: float | Literal["default"] = "default",
+        color: str | Inherit = INHERIT,
+        width: float | Inherit = INHERIT,
+        head_size: float | Inherit = INHERIT,
         shrink: float = 0,
+        style: Literal["->", "-|>", "-[", "]->", "simple", "fancy", "wedge"]
+        | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
         two_sided: bool = False,
     ):
         """This class implements an arrow object.
@@ -61,20 +97,42 @@ class Arrow(Plottable):
         pointA : tuple[float, float]
             Point A of the arrow. If the arrow is single-sided, refers to the tail.
         pointB : tuple[float, float]
-            Point B of the arrow. If the arrow is douple-sided, refers to the head.
+            Point B of the arrow. If the arrow is double-sided, refers to the head.
         color : str
             Color of the arrow. Default depends on the ``figure_style`` configuration.
         width : float, optional
-            Arrow line width. Default depends on the ``figure_style`` configuration.
+            Arrow line width.
+            Typical range is ``0.5`` to ``4``.
+            Default depends on the ``figure_style`` configuration.
         head_size : float, optional
             Scales the size of the arrow head.
+            Typical range is ``0.5`` to ``3``.
             Default depends on the ``figure_style`` configuration.
+        style : ``Literal["->", "-|>", "-[", "]->", "simple", "fancy", "wedge"] | Inherit``, optional
+            The style of the arrow. For a visual explanation of all available styles, see the gallery
+            `Arrow Styles <https://graphinglib.org/latest/examples/arrow_styles.html>`_ example.
+            Values are ``"->"``, ``"-|>"``, ``"-["``, ``"]->"``, ``"simple"``, ``"fancy"``, and ``"wedge"``.
+            Default depends on the ``figure_style`` configuration.
+
+            .. warning::
+                The ``style`` parameter differs slightly from matplotlib's ``arrowstyle`` since GraphingLib also uses a
+                ``two_sided`` parameter to explicitly define whether the arrow is single or double-sided.
         shrink : float
             Fraction of the total length of the arrow to shrink from both ends.
-            A value of 0.5 means the arrow is no longer visible.
+            Range is ``0`` to ``0.5``. A value of ``0.5`` means the arrow is no longer visible.
             Defaults to 0.
+        alpha : float
+            Opacity of the arrow.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
         two_sided : bool
             If ``True``, the arrow is double-sided. Defaults to ``False``.
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
         """
         self._pointA = pointA
         self._pointB = pointB
@@ -82,6 +140,8 @@ class Arrow(Plottable):
         self._width = width
         self._head_size = head_size
         self._shrink = shrink
+        self.style = style
+        self._alpha = alpha
         self._two_sided = two_sided
 
     @property
@@ -133,6 +193,36 @@ class Arrow(Plottable):
         self._shrink = value
 
     @property
+    def style(self):
+        return self._style
+
+    @style.setter
+    def style(self, value):
+        if value not in [
+            "->",
+            "-|>",
+            "-[",
+            "]->",
+            "simple",
+            "fancy",
+            "wedge",
+            INHERIT,
+        ]:
+            raise InvalidParameterError(
+                "style must be one of '->', '-|>', '-[', ']->', 'simple', 'fancy', "
+                f"'wedge', or INHERIT; got {value!r}."
+            )
+        self._style = value
+
+    @property
+    def alpha(self):
+        return self._alpha
+
+    @alpha.setter
+    def alpha(self, value):
+        self._alpha = value
+
+    @property
     def two_sided(self):
         return self._two_sided
 
@@ -163,15 +253,51 @@ class Arrow(Plottable):
 
     def _plot_element(self, axes: plt.Axes, z_order: int, **kwargs):
         if self._two_sided:
-            self._style = "<|-|>"
+            match self._style:
+                case "->":
+                    style = "<->"
+                case "-|>":
+                    style = "<|-|>"
+                case "-[":
+                    style = "]-["
+                case _:
+                    raise IncompatibleArgumentsError(
+                        "A two-sided arrow requires a head style of '->', '-|>', or "
+                        f"'-['; got {self._style!r}."
+                    )
         else:
-            self._style = "-|>"
-        head_length, head_width = self._head_size * 0.4, self._head_size * 0.2
+            style = self._style
+
+        if self._head_size != INHERIT:
+            head_size = resolve_or(self._head_size, 1)
+            head_length, head_width = head_size * 0.4, head_size * 0.2
+
+            # Set specific arrow properties
+            match self._style:
+                case "->" | "-|>" | "simple" | "fancy":
+                    prop_style_values = (
+                        f"head_width={head_width}, head_length={head_length}"
+                    )
+                case "-[":
+                    prop_style_values = f"widthB={head_width}" + (
+                        f", widthA={head_width}" if self._two_sided else ""
+                    )
+                case "]->":
+                    prop_style_values = f"widthA={head_width}"
+                case "wedge":
+                    prop_style_values = f"tail_width={head_width}"
+
+            arrow_style = f"{style}, {prop_style_values}"
+        else:
+            arrow_style = style
+
         props = {
-            "arrowstyle": f"{self._style}, head_width={head_width}, head_length={head_length}",
+            "arrowstyle": arrow_style,
             "color": self._color,
             "linewidth": self._width,
+            "alpha": self._alpha,
         }
+        props = strip_inherit(props)
         if self._shrink != 0:
             shrinkPointA, shrinkPointB = self._shrink_points()
             axes.annotate(
@@ -202,30 +328,48 @@ class Line(Plottable):
     pointB : tuple[float, float]
         Point B of the line.
     color : str
-        Color of the line. Default depends on the ``figure_style`` configuration.
+        Color of the line.
+        Default depends on the ``figure_style`` configuration.
     width : float, optional
-        Line width. Default depends on the ``figure_style`` configuration.
+        Line width.
+        Typical range is ``0.5`` to ``4``.
+        Default depends on the ``figure_style`` configuration.
     capped_line : bool
-        If ``True``, the line is capped on both ends. Defaults to ``False``.
+        If ``True``, the line is capped on both ends.
+        Defaults to ``False``.
     cap_width : float
-        Width of the caps. Default depends on the ``figure_style`` configuration.
+        Width of the caps.
+        Typical range is ``0.5`` to ``4``.
+        Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the line.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
     """
 
     _pointA: tuple[float, float]
     _pointB: tuple[float, float]
-    _color: str = "default"
-    _width: float | Literal["default"] = "default"
+    _color: str | Inherit = INHERIT
+    _width: float | Inherit = INHERIT
     _capped_line: bool = False
-    _cap_width: float | Literal["default"] = "default"
+    _cap_width: float | Inherit = INHERIT
+    _alpha: float | Inherit = INHERIT
 
     def __init__(
         self,
         pointA: tuple[float, float],
         pointB: tuple[float, float],
-        color: str = "default",
-        width: float | Literal["default"] = "default",
+        color: str | Inherit = INHERIT,
+        width: float | Inherit = INHERIT,
         capped_line: bool = False,
-        cap_width: float | Literal["default"] = "default",
+        cap_width: float | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
     ):
         self._pointA = pointA
         self._pointB = pointB
@@ -233,6 +377,7 @@ class Line(Plottable):
         self._width = width
         self._capped_line = capped_line
         self._cap_width = cap_width
+        self._alpha = alpha
 
     @property
     def pointA(self) -> tuple[float, float]:
@@ -251,19 +396,19 @@ class Line(Plottable):
         self._pointB = value
 
     @property
-    def color(self) -> str:
+    def color(self) -> str | Inherit:
         return self._color
 
     @color.setter
-    def color(self, value: str):
+    def color(self, value: str | Inherit):
         self._color = value
 
     @property
-    def width(self) -> float:
+    def width(self) -> float | Inherit:
         return self._width
 
     @width.setter
-    def width(self, value: float):
+    def width(self, value: float | Inherit):
         self._width = value
 
     @property
@@ -275,12 +420,20 @@ class Line(Plottable):
         self._capped_line = value
 
     @property
-    def cap_width(self) -> float:
+    def cap_width(self) -> float | Inherit:
         return self._cap_width
 
     @cap_width.setter
-    def cap_width(self, value: float):
+    def cap_width(self, value: float | Inherit):
         self._cap_width = value
+
+    @property
+    def alpha(self) -> float | Inherit:
+        return self._alpha
+
+    @alpha.setter
+    def alpha(self, value: float | Inherit):
+        self._alpha = value
 
     def copy(self) -> Self:
         """
@@ -288,16 +441,19 @@ class Line(Plottable):
         """
         return deepcopy(self)
 
-    def _plot_element(self, axes: plt.axes, z_order: int, **kwargs):
+    def _plot_element(self, axes: plt.Axes, z_order: int, **kwargs):
         if self._capped_line:
-            style = f"|-|, widthA={self._cap_width/2}, widthB={self._cap_width/2}"
+            cap_width = resolve_or(self._cap_width, 1)
+            style = f"|-|, widthA={cap_width / 2}, widthB={cap_width / 2}"
         else:
             style = "-"
         props = {
             "arrowstyle": style,
             "color": self._color,
             "linewidth": self._width,
+            "alpha": self._alpha,
         }
+        props = strip_inherit(props)
         axes.annotate(
             "",
             self._pointA,
@@ -317,29 +473,42 @@ class Polygon(Plottable):
     fill : bool, optional
         Whether the polygon should be filled or not.
         Default depends on the ``figure_style`` configuration.
-    color : str, optional
-        The color of the polygon (both the line and the fill).
+    edge_color : str, optional
+        The color of the polygon's edge.
+        Default depends on the ``figure_style`` configuration.
+    fill_color : str, optional
+        The color of the polygon's fill.
         Default depends on the ``figure_style`` configuration.
     line_width : float, optional
         The width of the line.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str, optional
         The style of the line.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
     fill_alpha : float, optional
         The alpha value of the fill.
+        Range is ``0`` (transparent) to ``1`` (opaque).
         Default depends on the ``figure_style`` configuration.
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
     """
 
     def __init__(
         self,
-        vertices: list[tuple[float, float]],
-        fill: bool = "default",
-        edge_color: str = "default",
-        fill_color: str = "default",
-        line_width: float | Literal["default"] = "default",
-        line_style: str = "default",
-        fill_alpha: float | Literal["default"] = "default",
+        vertices: Sequence[tuple[float, float]],
+        fill: bool | Inherit = INHERIT,
+        edge_color: str | Inherit = INHERIT,
+        fill_color: str | Inherit = INHERIT,
+        line_width: float | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        fill_alpha: float | Inherit = INHERIT,
     ):
         self._fill = fill
         self._edge_color = edge_color
@@ -442,7 +611,7 @@ class Polygon(Plottable):
         """
         return Point(*self.get_centroid_coordinates())
 
-    def create_intersection(self, other: Self, copy_style: bool = False) -> Self:
+    def create_intersection(self, other: Self, copy_style: bool = False) -> Polygon:
         """
         Returns the intersection of the polygon with another polygon.
 
@@ -467,7 +636,7 @@ class Polygon(Plottable):
                 list(self._sh_polygon.intersection(other._sh_polygon).exterior.coords)
             )
 
-    def create_union(self, other: Self, copy_style: bool = False) -> Self:
+    def create_union(self, other: Self, copy_style: bool = False) -> Polygon:
         """
         Returns the union of the polygon with another polygon.
 
@@ -492,7 +661,7 @@ class Polygon(Plottable):
                 list(self._sh_polygon.union(other._sh_polygon).exterior.coords)
             )
 
-    def create_difference(self, other: Self, copy_style: bool = False) -> Self:
+    def create_difference(self, other: Self, copy_style: bool = False) -> Polygon:
         """
         Returns the difference of the polygon with another polygon.
 
@@ -519,7 +688,7 @@ class Polygon(Plottable):
 
     def create_symmetric_difference(
         self, other: Self, copy_style: bool = False
-    ) -> list[Self]:
+    ) -> list[Polygon]:
         """
         Returns the symmetric difference of the polygon with another polygon.
 
@@ -537,22 +706,24 @@ class Polygon(Plottable):
         list[:class:`~graphinglib.shapes.Polygon`]
             A list of polygons resulting from the symmetric difference.
         """
-        if copy_style:
-            new_poly = self.copy()
-            new_poly._sh_polygon = self._sh_polygon.symmetric_difference(
-                other._sh_polygon
-            )
-            return new_poly
+        multi_poly = self._sh_polygon.symmetric_difference(other._sh_polygon)
+        if multi_poly.geom_type == "MultiPolygon":
+            polygons = [
+                Polygon(list(p.exterior.coords)) for p in list(multi_poly.geoms)
+            ]
         else:
-            multi_poly = self._sh_polygon.symmetric_difference(other._sh_polygon)
-            if multi_poly.geom_type == "MultiPolygon":
-                return [
-                    Polygon(list(p.exterior.coords)) for p in list(multi_poly.geoms)
-                ]
-            else:
-                return [Polygon(list(multi_poly.exterior.coords))]
+            polygons = [Polygon(list(multi_poly.exterior.coords))]
+        if copy_style:
+            for polygon in polygons:
+                polygon._fill = self._fill
+                polygon._fill_color = self._fill_color
+                polygon._edge_color = self._edge_color
+                polygon._line_width = self._line_width
+                polygon._line_style = self._line_style
+                polygon._fill_alpha = self._fill_alpha
+        return polygons
 
-    def translate(self, dx: float, dy: float) -> Self | None:
+    def translate(self, dx: float, dy: float) -> None:
         """
         Translates the polygon by the specified amount.
 
@@ -570,7 +741,7 @@ class Polygon(Plottable):
         angle: float,
         center: Optional[tuple[float, float]] = None,
         use_rad: bool = False,
-    ) -> Self:
+    ) -> None:
         """
         Rotates the polygon by the specified angle.
 
@@ -596,7 +767,7 @@ class Polygon(Plottable):
         x_scale: float,
         y_scale: float,
         center: Optional[tuple[float, float]] = None,
-    ) -> Self:
+    ) -> None:
         """
         Scales the polygon by the specified factors.
 
@@ -623,7 +794,7 @@ class Polygon(Plottable):
         y_skew: float,
         center: Optional[tuple[float, float]] = None,
         use_rad: bool = False,
-    ) -> Self:
+    ) -> None:
         """
         Skews the polygon by the specified factors.
 
@@ -646,7 +817,7 @@ class Polygon(Plottable):
             self._sh_polygon, xs=x_skew, ys=y_skew, origin=center, use_radians=use_rad
         )
 
-    def split(self, curve: Curve, copy_style: bool = False) -> list[Self]:
+    def split(self, curve: Curve, copy_style: bool = False) -> list[Polygon]:
         """
         Splits the polygon by a curve.
 
@@ -663,7 +834,9 @@ class Polygon(Plottable):
             The list of polygons resulting from the split.
         """
         if not isinstance(curve, Curve):
-            raise TypeError("The curve must be a Curve object")
+            raise InvalidParameterTypeError(
+                f"curve must be a Curve; got {type(curve).__name__}."
+            )
         sh_curve = LineString([(x, y) for x, y in zip(curve._x_data, curve._y_data)])
         split_sh_polygons = ops.split(self._sh_polygon, sh_curve)
         split_sh_polygons = [
@@ -680,7 +853,7 @@ class Polygon(Plottable):
                 polygon._fill_alpha = self._fill_alpha
         return polygons
 
-    def linear_transformation(self, matrix: np.ndarray) -> Self:
+    def linear_transformation(self, matrix: np.ndarray) -> None:
         """
         Applies a transformation matrix to the polygon.
 
@@ -738,29 +911,33 @@ class Polygon(Plottable):
             )
             return [Point(p.x, p.y) for p in intersection.geoms]
         else:
-            raise TypeError("The other object must be a Polygon or a Curve")
+            raise InvalidParameterTypeError(
+                f"other must be a Polygon or a Curve; got {type(other).__name__}."
+            )
 
     def _plot_element(self, axes: plt.Axes, z_order: int, **kwargs):
         # Create a polygon patch for the fill
-        if self._fill:
-            kwargs = {
+        if resolve_or(self._fill, True):
+            params = {
                 "alpha": self._fill_alpha,
-                "zorder": z_order - 1,
+                "zorder": z_order,
             }
             if self._fill_color is not None:
-                kwargs["facecolor"] = self._fill_color
-            polygon_fill = MPLPolygon(self.vertices, **kwargs)
+                params["facecolor"] = self._fill_color
+            params = strip_inherit(params)
+            polygon_fill = MPLPolygon(self.vertices, **params)
             axes.add_patch(polygon_fill)
         # Create a polygon patch for the edge
         if self._edge_color is not None:
-            kwargs = {
+            params = {
                 "fill": None,
                 "linewidth": self._line_width,
                 "linestyle": self._line_style,
                 "edgecolor": self._edge_color,
                 "zorder": z_order,
             }
-            polygon_edge = MPLPolygon(self.vertices, **kwargs)
+            params = strip_inherit(params)
+            polygon_edge = MPLPolygon(self.vertices, **params)
             axes.add_patch(polygon_edge)
 
 
@@ -787,16 +964,26 @@ class Circle(Polygon):
         Default depends on the ``figure_style`` configuration.
     line_width : float, optional
         The width of the line.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str, optional
         The style of the line.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
     fill_alpha : float, optional
         The alpha value of the fill.
+        Range is ``0`` (transparent) to ``1`` (opaque).
         Default depends on the ``figure_style`` configuration.
     number_of_points : int, optional
         The number of points to use to approximate the circle.
         Default is 100 (covers approximately 99.9% of perfect circle area).
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
     """
 
     def __init__(
@@ -804,27 +991,25 @@ class Circle(Polygon):
         x_center: float,
         y_center: float,
         radius: float,
-        fill: bool = "default",
-        fill_color: str = "default",
-        edge_color: str = "default",
-        line_width: float | Literal["default"] = "default",
-        line_style: str = "default",
-        fill_alpha: float | Literal["default"] = "default",
+        fill: bool | Inherit = INHERIT,
+        fill_color: str | Inherit = INHERIT,
+        edge_color: str | Inherit = INHERIT,
+        line_width: float | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        fill_alpha: float | Inherit = INHERIT,
         number_of_points: int = 100,
     ):
-        if number_of_points < 4:
-            raise ValueError("The number of points must be greater than or equal to 4")
+        self.number_of_points = number_of_points
         self._fill = fill
         self._fill_color = fill_color
         self._edge_color = edge_color
         self._line_width = line_width
         self._line_style = line_style
         self._fill_alpha = fill_alpha
-        if radius <= 0:
-            raise ValueError("The radius must be positive")
         self._sh_polygon = sh.geometry.Point(x_center, y_center).buffer(
-            radius, number_of_points // 4
+            1, self._num_points // 4
         )
+        self.radius = radius
 
     @property
     def x_center(self):
@@ -833,7 +1018,7 @@ class Circle(Polygon):
     @x_center.setter
     def x_center(self, value):
         self._sh_polygon = sh.geometry.Point(value, self.y_center).buffer(
-            self.radius, self._sh_polygon.exterior.coords
+            self.radius, self._num_points // 4
         )
 
     @property
@@ -843,7 +1028,7 @@ class Circle(Polygon):
     @y_center.setter
     def y_center(self, value):
         self._sh_polygon = sh.geometry.Point(self.x_center, value).buffer(
-            self.radius, self._sh_polygon.exterior.coords
+            self.radius, self._num_points // 4
         )
 
     @property
@@ -852,8 +1037,10 @@ class Circle(Polygon):
 
     @radius.setter
     def radius(self, value):
+        if value <= 0:
+            raise InvalidParameterError(f"radius must be positive; got {value}.")
         self._sh_polygon = sh.geometry.Point(self.x_center, self.y_center).buffer(
-            value, self._sh_polygon.exterior.coords
+            value, self._num_points // 4
         )
 
     @property
@@ -863,6 +1050,212 @@ class Circle(Polygon):
     @diameter.setter
     def diameter(self, value):
         self.radius = value / 2
+
+    @property
+    def number_of_points(self):
+        return self._num_points
+
+    @number_of_points.setter
+    def number_of_points(self, value):
+        if value < 4:
+            raise InvalidParameterError(
+                f"number_of_points must be at least 4; got {value}."
+            )
+        self._num_points = value
+
+    @property
+    def circumference(self):
+        return self._sh_polygon.exterior.length
+
+
+@dataclass
+class Ellipse(Polygon):
+    """This class implements an Ellipse object with a given center, two radii and an optional rotation angle.
+
+    Parameters
+    ----------
+    x_center : float
+        The x coordinate of the center of the ellipse.
+    y_center : float
+        The y coordinate of the center of the ellipse.
+    x_radius : float
+        The radius of the ellipse along the x axis.
+    y_radius : float
+        The radius of the ellipse along the y axis.
+    angle : float, optional
+        The rotation angle of the ellipse in degrees.
+        Defaults to 0.
+    fill : bool, optional
+        Whether the ellipse should be filled or not.
+        Default depends on the ``figure_style`` configuration.
+    fill_color : str, optional
+        The color of the ellipse's fill.
+        Default depends on the ``figure_style`` configuration.
+    edge_color : str, optional
+        The color of the ellipse's edge.
+        Default depends on the ``figure_style`` configuration.
+    line_width : float, optional
+        The width of the line.
+        Typical range is ``0.5`` to ``4``.
+        Default depends on the ``figure_style`` configuration.
+    line_style : str, optional
+        The style of the line.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
+        Default depends on the ``figure_style`` configuration.
+    fill_alpha : float, optional
+        The alpha value of the fill.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+    number_of_points : int, optional
+        The number of points to use to approximate the ellipse.
+        Default is 100 (covers approximately 99.9% of perfect ellipse area).
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
+    """
+
+    def __init__(
+        self,
+        x_center: float,
+        y_center: float,
+        x_radius: float,
+        y_radius: float,
+        angle: float = 0,
+        fill: bool | Inherit = INHERIT,
+        fill_color: str | Inherit = INHERIT,
+        edge_color: str | Inherit = INHERIT,
+        line_width: float | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        fill_alpha: float | Inherit = INHERIT,
+        number_of_points: int = 100,
+    ):
+        self.number_of_points = number_of_points
+        self._fill = fill
+        self._fill_color = fill_color
+        self._edge_color = edge_color
+        self._line_width = line_width
+        self._line_style = line_style
+        self._fill_alpha = fill_alpha
+        self._x_radius = 1
+        self._y_radius = 1
+        self._angle = 0
+        self._sh_polygon = sh.geometry.Point(x_center, y_center).buffer(
+            1, self._num_points // 4
+        )
+        self.x_radius = x_radius
+        self.y_radius = y_radius
+        self.angle = angle
+
+    def _rebuild(
+        self,
+        x_center: float,
+        y_center: float,
+        x_radius: float,
+        y_radius: float,
+        angle: float,
+    ):
+        self._x_radius = x_radius
+        self._y_radius = y_radius
+        self._angle = angle
+        self._sh_polygon = sh.geometry.Point(x_center, y_center).buffer(
+            1, self._num_points // 4
+        )
+        self._sh_polygon = sh.affinity.scale(
+            self._sh_polygon,
+            xfact=x_radius,
+            yfact=y_radius,
+            origin=(x_center, y_center),
+        )
+        if angle != 0:
+            self._sh_polygon = sh.affinity.rotate(
+                self._sh_polygon, angle, origin=(x_center, y_center)
+            )
+
+    @property
+    def x_center(self):
+        return self.get_centroid_coordinates()[0]
+
+    @x_center.setter
+    def x_center(self, value):
+        self._rebuild(value, self.y_center, self._x_radius, self._y_radius, self._angle)
+
+    @property
+    def y_center(self):
+        return self.get_centroid_coordinates()[1]
+
+    @y_center.setter
+    def y_center(self, value):
+        self._rebuild(self.x_center, value, self._x_radius, self._y_radius, self._angle)
+
+    @property
+    def x_radius(self):
+        return self._x_radius
+
+    @x_radius.setter
+    def x_radius(self, value):
+        if value <= 0:
+            raise InvalidParameterError(f"x_radius must be positive; got {value}.")
+        self._rebuild(self.x_center, self.y_center, value, self._y_radius, self._angle)
+
+    @property
+    def y_radius(self):
+        return self._y_radius
+
+    @y_radius.setter
+    def y_radius(self, value):
+        if value <= 0:
+            raise InvalidParameterError(f"y_radius must be positive; got {value}.")
+        self._rebuild(self.x_center, self.y_center, self._x_radius, value, self._angle)
+
+    @property
+    def angle(self):
+        return self._angle
+
+    @angle.setter
+    def angle(self, value):
+        self._rebuild(
+            self.x_center, self.y_center, self._x_radius, self._y_radius, value
+        )
+
+    @property
+    def number_of_points(self):
+        return self._num_points
+
+    @number_of_points.setter
+    def number_of_points(self, value):
+        if value < 4:
+            raise InvalidParameterError(
+                f"number_of_points must be at least 4; got {value}."
+            )
+        self._num_points = value
+
+    @property
+    def width(self):
+        """Returns the width of the ellipse along the x axis."""
+        return 2 * self._x_radius
+
+    @width.setter
+    def width(self, value):
+        """Controls the width of the ellipse along the x axis."""
+        if value <= 0:
+            raise InvalidParameterError(f"width must be positive; got {value}.")
+        self.x_radius = value / 2
+
+    @property
+    def height(self):
+        """Returns the height of the ellipse along the y axis."""
+        return 2 * self._y_radius
+
+    @height.setter
+    def height(self, value):
+        """Controls the height of the ellipse along the y axis."""
+        if value <= 0:
+            raise InvalidParameterError(f"height must be positive; got {value}.")
+        self.y_radius = value / 2
 
     @property
     def circumference(self):
@@ -894,13 +1287,23 @@ class Rectangle(Polygon):
         Default depends on the ``figure_style`` configuration.
     line_width : float, optional
         The width of the line.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str, optional
         The style of the line.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
     fill_alpha : float, optional
         The alpha value of the fill.
+        Range is ``0`` (transparent) to ``1`` (opaque).
         Default depends on the ``figure_style`` configuration.
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
     """
 
     def __init__(
@@ -909,18 +1312,13 @@ class Rectangle(Polygon):
         y_bottom_left: float,
         width: float,
         height: float,
-        fill: bool = "default",
-        fill_color: str = "default",
-        edge_color: str = "default",
-        line_width: float | Literal["default"] = "default",
-        line_style: str = "default",
-        fill_alpha: float | Literal["default"] = "default",
+        fill: bool | Inherit = INHERIT,
+        fill_color: str | Inherit = INHERIT,
+        edge_color: str | Inherit = INHERIT,
+        line_width: float | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        fill_alpha: float | Inherit = INHERIT,
     ):
-        if width <= 0:
-            raise ValueError("The width must be positive")
-        if height <= 0:
-            raise ValueError("The height must be positive")
-
         self._fill = fill
         self._fill_color = fill_color
         self._edge_color = edge_color
@@ -930,11 +1328,13 @@ class Rectangle(Polygon):
         self._sh_polygon = ShPolygon(
             [
                 (x_bottom_left, y_bottom_left),
-                (x_bottom_left + width, y_bottom_left),
-                (x_bottom_left + width, y_bottom_left + height),
-                (x_bottom_left, y_bottom_left + height),
+                (x_bottom_left + 1, y_bottom_left),
+                (x_bottom_left + 1, y_bottom_left + 1),
+                (x_bottom_left, y_bottom_left + 1),
             ]
         )
+        self.width = width
+        self.height = height
 
     @property
     def x_bottom_left(self):
@@ -972,6 +1372,8 @@ class Rectangle(Polygon):
 
     @width.setter
     def width(self, value):
+        if value <= 0:
+            raise InvalidParameterError(f"width must be positive; got {value}.")
         self._sh_polygon = ShPolygon(
             [
                 (self.x_bottom_left, self.y_bottom_left),
@@ -987,6 +1389,8 @@ class Rectangle(Polygon):
 
     @height.setter
     def height(self, value):
+        if value <= 0:
+            raise InvalidParameterError(f"height must be positive; got {value}.")
         self._sh_polygon = ShPolygon(
             [
                 (self.x_bottom_left, self.y_bottom_left),
@@ -1019,12 +1423,12 @@ class Rectangle(Polygon):
         y: float,
         width: float,
         height: float,
-        fill: bool = "default",
-        fill_color: str = "default",
-        edge_color: str = "default",
-        line_width: float | Literal["default"] = "default",
-        line_style: str = "default",
-        fill_alpha: float | Literal["default"] = "default",
+        fill: bool | Inherit = INHERIT,
+        fill_color: str | Inherit = INHERIT,
+        edge_color: str | Inherit = INHERIT,
+        line_width: float | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        fill_alpha: float | Inherit = INHERIT,
     ) -> Self:
         """Creates a :class:`~graphinglib.shapes.Rectangle` from its center point, width and height.
 
@@ -1049,13 +1453,23 @@ class Rectangle(Polygon):
             Default depends on the ``figure_style`` configuration.
         line_width : float, optional
             The width of the line.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str, optional
             The style of the line.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
         fill_alpha : float, optional
             The alpha value of the fill.
+            Range is ``0`` (transparent) to ``1`` (opaque).
             Default depends on the ``figure_style`` configuration.
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
         """
         return cls(
             x - width / 2,

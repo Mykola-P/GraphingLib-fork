@@ -1,6 +1,7 @@
+from copy import deepcopy
 from shutil import which
 from string import ascii_lowercase
-from typing import Literal, Optional
+from typing import Any, Optional, Self, cast
 
 import matplotlib.pyplot as plt
 from matplotlib import rcParamsDefault
@@ -9,30 +10,36 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.legend_handler import HandlerPatch
 from matplotlib.patches import Polygon
 from matplotlib.transforms import ScaledTranslation
+from typing_extensions import deprecated
 
+from .figure import Figure
 from .file_manager import FileLoader, get_default_style
-from .graph_elements import GraphingException, Plottable
+from .exceptions import (
+    InvalidParameterError,
+    InvalidParameterTypeError,
+    StyleNotFoundError,
+)
+from .inherit import INHERIT, Inherit, is_inherit, resolved
 from .legend_artists import (
     HandlerMultipleLines,
     HandlerMultipleVerticalLines,
     VerticalLineCollection,
     histogram_legend_artist,
 )
-
-from .figure import Figure
-
-try:
-    from typing import Self
-except ImportError:
-    from typing_extensions import Self
+from .tools import _copy_with_overrides
 
 
+@deprecated("Consider using the SmartFigure instead")
 class MultiFigure:
     """
     This class implements the "canvas" on which multiple plots are displayed.
 
     The canvas consists of a grid of a specified size on which the
     :class:`~graphinglib.figure.Figure` objects are displayed.
+
+    .. warning::
+
+       The ``MultiFigure`` is deprecated in favor of the :class:`~graphinglib.SmartFigure`.
 
     Parameters
     ----------
@@ -46,6 +53,7 @@ class MultiFigure:
 
     size : tuple[float, float]
         Overall size of the multifigure.
+        Figure size is in inches; typical width is ``4`` to ``12`` and typical height is ``3`` to ``8``.
         Default depends on the ``figure_style`` configuration.
     title : str, optional
         General title of the figure.
@@ -58,8 +66,8 @@ class MultiFigure:
             to a particular SubFigure in a caption accompanying the MultiFigure.
 
     reflabel_loc : str
-        Location of the reference labels of the SubFigures. Either "inside" or "outside".
-        Defaults to "outside".
+        Location of the reference labels of the SubFigures. Values are ``"inside"`` and ``"outside"``.
+        Defaults to ``"outside"``.
     figure_style : str
         The figure style to use for the figure.
         Default can be set using ``gl.set_default_style()``.
@@ -69,11 +77,11 @@ class MultiFigure:
         self,
         num_rows: int,
         num_cols: int,
-        size: tuple[float, float] | Literal["default"] = "default",
+        size: tuple[float, float] | Inherit = INHERIT,
         title: Optional[str] = None,
         reference_labels: bool = True,
         reflabel_loc: str = "outside",
-        figure_style: str = "default",
+        figure_style: str | Inherit = INHERIT,
     ) -> None:
         """
         This class implements the "canvas" on which multiple plots are displayed.
@@ -93,6 +101,7 @@ class MultiFigure:
 
         size : tuple[float, float]
             Overall size of the figure.
+            Figure size is in inches; typical width is ``4`` to ``12`` and typical height is ``3`` to ``8``.
             Default depends on the ``figure_style`` configuration.
         title : str, optional
             General title of the figure.
@@ -105,16 +114,20 @@ class MultiFigure:
                 to a particular SubFigure in a caption accompanying the MultiFigure.
 
         reflabel_loc : str
-            Location of the reference labels of the SubFigures. Either "inside" or "outside".
-            Defaults to "outside".
+            Location of the reference labels of the SubFigures. Values are ``"inside"`` and ``"outside"``.
+            Defaults to ``"outside"``.
         figure_style : str
             The figure style to use for the figure.
             Default can be set using ``gl.set_default_style()``.
         """
-        if type(num_rows) != int or type(num_cols) != int:
-            raise TypeError("The number of rows and columns must be integers.")
+        if type(num_rows) is not int or type(num_cols) is not int:
+            raise InvalidParameterTypeError(
+                "The number of rows and columns must be integers."
+            )
         if num_rows < 1 or num_cols < 1:
-            raise ValueError("The number of rows and columns must be greater than 0.")
+            raise InvalidParameterError(
+                "The number of rows and columns must be greater than 0."
+            )
         self._num_rows = num_rows
         self._num_cols = num_cols
         self._title = title
@@ -122,9 +135,9 @@ class MultiFigure:
         self._reflabel_loc = reflabel_loc
         self._figure_style = figure_style
         self._size = size
-        self._sub_figures = []
-        self._rc_dict = {}
-        self._user_rc_dict = {}
+        self._sub_figures: list[Figure] = []
+        self._rc_dict: dict[str, Any] = {}
+        self._user_rc_dict: dict[str, Any] = {}
 
     @property
     def num_rows(self) -> int:
@@ -159,30 +172,53 @@ class MultiFigure:
         self._reflabel_loc = reflabel_loc
 
     @property
-    def figure_style(self) -> str:
+    def figure_style(self) -> str | Inherit:
         return self._figure_style
 
     @figure_style.setter
-    def figure_style(self, figure_style: str) -> None:
+    def figure_style(self, figure_style: str | Inherit) -> None:
         self._figure_style = figure_style
 
     @property
-    def size(self) -> tuple[float, float] | Literal["default"]:
+    def size(self) -> tuple[float, float] | Inherit:
         return self._size
 
     @size.setter
-    def size(self, size: tuple[float, float] | Literal["default"]) -> None:
+    def size(self, size: tuple[float, float] | Inherit) -> None:
         self._size = size
+
+    def copy(self) -> Self:
+        """
+        Returns a deep copy of the :class:`~graphinglib.multifigure.MultiFigure` object.
+        """
+        return deepcopy(self)
+
+    def copy_with(self, **kwargs) -> Self:
+        """
+        Returns a deep copy of the MultiFigure with specified attributes overridden.
+
+        Parameters
+        ----------
+        **kwargs
+            Public writable properties to override in the copied MultiFigure. The keys should be property names to
+            modify and the values are the new values for those properties.
+
+        Returns
+        -------
+        MultiFigure
+            A new MultiFigure instance with the specified attributes overridden.
+        """
+        return _copy_with_overrides(self, **kwargs)
 
     @classmethod
     def from_row(
         cls,
         figures: list[Figure],
-        size: tuple[float, float] | Literal["default"] = "default",
+        size: tuple[float, float] | Inherit = INHERIT,
         title: Optional[str] = None,
         reference_labels: bool = True,
         reflabel_loc: str = "outside",
-        figure_style: str = "default",
+        figure_style: str | Inherit = INHERIT,
     ) -> Self:
         """Creates a MultiFigure with the specified :class:`~graphinglib.figure.Figure` objects in a horizontal configuration.
 
@@ -192,6 +228,7 @@ class MultiFigure:
             The :class:`~graphinglib.figure.Figure` objects to add to the MultiFigure, from left to right.
         size : tuple[float, float]
             Overall size of the figure.
+            Figure size is in inches; typical width is ``4`` to ``12`` and typical height is ``3`` to ``8``.
             Default depends on the ``figure_style`` configuration.
         title : str, optional
             Title of the MultiFigure.
@@ -200,8 +237,8 @@ class MultiFigure:
             Whether or not to add reference labels to the SubFigures.
             Defaults to ``True``.
         reflabel_loc : str
-            Location of the reference labels of the SubFigures. Either "inside" or "outside".
-            Defaults to "outside".
+            Location of the reference labels of the SubFigures. Values are ``"inside"`` and ``"outside"``.
+            Defaults to ``"outside"``.
         figure_style : str
             The figure style to use for the figure.
             Default can be set using ``gl.set_default_style()``.
@@ -227,11 +264,11 @@ class MultiFigure:
     def from_stack(
         cls,
         figures: list[Figure],
-        size: tuple[float, float] | Literal["default"] = "default",
+        size: tuple[float, float] | Inherit = INHERIT,
         title: Optional[str] = None,
         reference_labels: bool = True,
         reflabel_loc: str = "outside",
-        figure_style: str = "default",
+        figure_style: str | Inherit = INHERIT,
     ) -> Self:
         """Creates a MultiFigure with the specified :class:`~graphinglib.figure.Figure` objects in a vertical configuration.
 
@@ -241,6 +278,7 @@ class MultiFigure:
             The :class:`~graphinglib.figure.Figure` objects to add to the MultiFigure, from top to bottom.
         size : tuple[float, float]
             Overall size of the figure.
+            Figure size is in inches; typical width is ``4`` to ``12`` and typical height is ``3`` to ``8``.
             Default depends on the ``figure_style`` configuration.
         title : str, optional
             Title of the MultiFigure.
@@ -249,8 +287,8 @@ class MultiFigure:
             Whether or not to add reference labels to the SubFigures.
             Defaults to ``True``.
         reflabel_loc : str
-            Location of the reference labels of the SubFigures. Either "inside" or "outside".
-            Defaults to "outside".
+            Location of the reference labels of the SubFigures. Values are ``"inside"`` and ``"outside"``.
+            Defaults to ``"outside"``.
         figure_style : str
             The figure style to use for the figure.
             Default can be set using ``gl.set_default_style()``.
@@ -277,11 +315,11 @@ class MultiFigure:
         cls,
         figures: list[Figure],
         dimensions: tuple[int, int],
-        size: tuple[float, float] | Literal["default"] = "default",
+        size: tuple[float, float] | Inherit = INHERIT,
         title: Optional[str] = None,
         reference_labels: bool = True,
         reflabel_loc: str = "outside",
-        figure_style: str = "default",
+        figure_style: str | Inherit = INHERIT,
     ) -> Self:
         """Creates a MultiFigure with the specified :class:`~graphinglib.figure.Figure` objects in a grid configuration.
 
@@ -293,6 +331,7 @@ class MultiFigure:
             The number of rows and columns of the grid (product should equal the number of figures).
         size : tuple[float, float]
             Overall size of the figure.
+            Figure size is in inches; typical width is ``4`` to ``12`` and typical height is ``3`` to ``8``.
             Default depends on the ``figure_style`` configuration.
         title : str, optional
             Title of the MultiFigure.
@@ -301,8 +340,8 @@ class MultiFigure:
             Whether or not to add reference labels to the SubFigures.
             Defaults to ``True``.
         reflabel_loc : str
-            Location of the reference labels of the SubFigures. Either "inside" or "outside".
-            Defaults to "outside".
+            Location of the reference labels of the SubFigures. Values are ``"inside"`` and ``"outside"``.
+            Defaults to ``"outside"``.
         figure_style : str
             The figure style to use for the figure.
             Default can be set using ``gl.set_default_style()``.
@@ -313,7 +352,7 @@ class MultiFigure:
         """
         num_rows, num_cols = dimensions
         if num_rows * num_cols < len(figures):
-            raise ValueError(
+            raise InvalidParameterError(
                 f"The product of the dimensions ({num_rows} x {num_cols}) must be greater than or equal to the number of figures ({len(figures)})."
             )
         multi_fig = cls(
@@ -356,19 +395,19 @@ class MultiFigure:
             The number of columns spanned by the SubFigure.
         """
 
-        if type(row_start) != int or type(col_start) != int:
-            raise TypeError("The placement values must be integers.")
+        if type(row_start) is not int or type(col_start) is not int:
+            raise InvalidParameterTypeError("The placement values must be integers.")
         if row_start < 0 or col_start < 0:
-            raise ValueError("The placement values cannot be negative.")
-        if type(row_span) != int or type(col_span) != int:
-            raise TypeError("The span values must be integers.")
+            raise InvalidParameterError("The placement values cannot be negative.")
+        if type(row_span) is not int or type(col_span) is not int:
+            raise InvalidParameterTypeError("The span values must be integers.")
         if row_span < 1 or col_span < 1:
-            raise ValueError("The span values must be greater than 0.")
+            raise InvalidParameterError("The span values must be greater than 0.")
         if (
             row_start + row_span > self._num_rows
             or col_start + col_span > self._num_cols
         ):
-            raise ValueError(
+            raise InvalidParameterError(
                 "The placement values and span values must be inside the size of the MultiFigure."
             )
         # Add location and span to the SubFigure (create new attributes)
@@ -381,7 +420,7 @@ class MultiFigure:
     def show(
         self,
         general_legend: bool = False,
-        legend_loc: str | tuple = "outside lower center",
+        legend_loc: str | tuple[float, float] = "outside lower center",
         legend_cols: int = 1,
     ) -> None:
         """
@@ -414,7 +453,7 @@ class MultiFigure:
         self,
         file_name: str,
         general_legend: bool = False,
-        legend_loc: str | tuple = "outside lower center",
+        legend_loc: str | tuple[float, float] = "outside lower center",
         legend_cols: int = 1,
         dpi: Optional[int] = None,
     ) -> None:
@@ -456,13 +495,13 @@ class MultiFigure:
     def _prepare_multi_figure(
         self,
         general_legend: bool = False,
-        legend_loc: str = "outside lower center",
+        legend_loc: str | tuple[float, float] = "outside lower center",
         legend_cols: int = 1,
     ) -> None:
         """
         Prepares the :class:`~graphinglib.multifigure.MultiFigure` to be displayed.
         """
-        if self._figure_style == "default":
+        if is_inherit(self._figure_style):
             self._figure_style = get_default_style()
         try:
             file_loader = FileLoader(self._figure_style)
@@ -474,18 +513,18 @@ class MultiFigure:
                 if self._figure_style == "matplotlib":
                     plt.style.use("default")
                 else:
-                    plt.style.use(self._figure_style)
+                    plt.style.use(resolved(self._figure_style))
                 file_loader = FileLoader("plain")
                 self._default_params = file_loader.load()
             except OSError:
-                raise GraphingException(
+                raise StyleNotFoundError(
                     f"The figure style {self._figure_style} was not found. Please choose a different style."
                 )
 
         multi_figure_params_to_reset = self._fill_in_missing_params(self)
 
         self._fill_in_rc_params(is_matplotlib_style)
-        self._figure = plt.figure(layout="constrained", figsize=self._size)
+        self._figure = plt.figure(layout="constrained", figsize=resolved(self._size))
         MultiFigure_grid = GridSpec(self._num_rows, self._num_cols, figure=self._figure)
 
         if self._reflabel_loc == "outside":
@@ -493,13 +532,14 @@ class MultiFigure:
         elif self._reflabel_loc == "inside":
             trans = ScaledTranslation(10 / 72, -15 / 72, self._figure.dpi_scale_trans)
         else:
-            raise ValueError(
+            raise InvalidParameterError(
                 "Invalid reference label location. Please specify either 'inside' or 'outside'."
             )
 
         sub_figures_do_legend = True if not general_legend else False
 
-        labels, handles = [], []
+        labels: list[str] = []
+        handles: list[Any] = []
         for i, sub_figure in enumerate(self._sub_figures):
             self._fill_in_rc_params(is_matplotlib_style)
             sub_figure_labels, sub_figure_handles = self._prepare_sub_figure(
@@ -514,8 +554,10 @@ class MultiFigure:
             handles += sub_figure_handles
         self._fill_in_rc_params(is_matplotlib_style)
         if general_legend:
+            # matplotlib's legend() stub has no overload accepting handler_map and
+            # handleheight together, so the typing warning is suppressed.
             try:
-                _legend = self._figure.legend(
+                _legend = self._figure.legend(  # ty: ignore[no-matching-overload]
                     handles=handles,
                     labels=labels,
                     handleheight=1.3,
@@ -529,8 +571,8 @@ class MultiFigure:
                     ncols=legend_cols,
                 )
                 _legend.set_zorder(10000)
-            except:
-                _legend = self._figure.legend(
+            except TypeError:
+                _legend = self._figure.legend(  # ty: ignore[no-matching-overload]
                     handles=handles,
                     labels=labels,
                     handleheight=1.3,
@@ -543,7 +585,8 @@ class MultiFigure:
                     ncols=legend_cols,
                 )
                 _legend.set_zorder(10000)
-        self._figure.suptitle(self._title)
+        if self._title is not None:
+            self._figure.suptitle(self._title)
         self._reset_params_to_default(self, multi_figure_params_to_reset)
         self._rc_dict = {}
 
@@ -560,12 +603,20 @@ class MultiFigure:
         Prepares a single subfigure.
         """
         sub_rcs = sub_figure._user_rc_dict
-        plt.rcParams.update(sub_rcs)
+        plt.rcParams.update(cast(Any, sub_rcs))
+        row_start = sub_figure._row_start
+        col_start = sub_figure._col_start
+        row_span = sub_figure._row_span
+        col_span = sub_figure._col_span
+        assert row_start is not None
+        assert col_start is not None
+        assert row_span is not None
+        assert col_span is not None
         axes = plt.subplot(
             grid.new_subplotspec(
-                (sub_figure._row_start, sub_figure._col_start),
-                rowspan=sub_figure._row_span,
-                colspan=sub_figure._col_span,
+                (row_start, col_start),
+                rowspan=row_span,
+                colspan=col_span,
             )
         )
         if self._reference_labels:
@@ -586,14 +637,14 @@ class MultiFigure:
         )
         return labels, handles
 
-    def _fill_in_missing_params(self, element: Plottable) -> list[str]:
+    def _fill_in_missing_params(self, element: object) -> list[str]:
         """
         Fills in the missing parameters from the specified ``figure_style``.
         """
         params_to_reset = []
         object_type = type(element).__name__
         for property, value in vars(element).items():
-            if (type(value) == str) and (value == "default"):
+            if is_inherit(value):
                 params_to_reset.append(property)
                 if self._default_params[object_type][property] == "same as curve":
                     element.__dict__["_errorbars_color"] = self._default_params[
@@ -616,13 +667,13 @@ class MultiFigure:
         return params_to_reset
 
     def _reset_params_to_default(
-        self, element: Plottable, params_to_reset: list[str]
+        self, element: object, params_to_reset: list[str]
     ) -> None:
         """
         Resets the parameters that were set to default in the _fill_in_missing_params method.
         """
         for param in params_to_reset:
-            setattr(element, param, "default")
+            setattr(element, param, INHERIT)
 
     def _fill_in_rc_params(self, is_matplotlib_style: bool = False) -> None:
         """
@@ -635,8 +686,8 @@ class MultiFigure:
             if self._figure_style == "matplotlib":
                 plt.style.use("default")
             else:
-                plt.style.use(self._figure_style)
-            plt.rcParams.update(self._user_rc_dict)
+                plt.style.use(resolved(self._figure_style))
+            plt.rcParams.update(cast(Any, self._user_rc_dict))
         else:
             params = self._default_params["rc_params"]
             for property, value in params.items():
@@ -651,11 +702,11 @@ class MultiFigure:
                     all_rc_params["text.usetex"] = False
             except KeyError:
                 pass
-            plt.rcParams.update(all_rc_params)
+            plt.rcParams.update(cast(Any, all_rc_params))
 
     def set_rc_params(
         self,
-        rc_params_dict: dict[str, str | float] = {},
+        rc_params_dict: dict[str, Any] = {},
         reset: bool = False,
     ) -> None:
         """
@@ -724,6 +775,7 @@ class MultiFigure:
             Defaults to ``None``.
         axes_line_width : float
             The width of the axes lines.
+            Typical range is ``0.5`` to ``3``.
             Defaults to ``None``.
         color_cycle : list[str]
             A list of colors to use for the color cycle.
@@ -745,9 +797,12 @@ class MultiFigure:
             Defaults to ``None``.
         font_size : float
             The font size to use.
+            Typical range is ``8`` to ``20``.
             Defaults to ``None``.
         font_weight : str
             The font weight to use.
+            Values include ``"normal"``, ``"bold"``, ``"light"``, ``"ultralight"``, ``"heavy"``, and
+            ``"black"``.
             Defaults to ``None``.
         text_color : str
             The color of the text.
@@ -757,19 +812,28 @@ class MultiFigure:
             Defaults to ``None``.
         grid_line_style : str
             The style of the grid lines.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Defaults to ``None``.
         grid_line_width : float
             The width of the grid lines.
+            Typical range is ``0.5`` to ``3``.
             Defaults to ``None``.
         grid_color : str
             The color of the grid lines.
             Defaults to ``None``.
         grid_alpha : float
             The alpha of the grid lines.
+            Range is ``0`` (transparent) to ``1`` (opaque).
             Defaults to ``None``.
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
         """
-        if color_cycle is not None:
-            color_cycle = plt.cycler(color=color_cycle)
+        prop_cycle = plt.cycler(color=color_cycle) if color_cycle is not None else None
 
         rc_params_dict = {
             "figure.facecolor": figure_face_color,
@@ -777,7 +841,7 @@ class MultiFigure:
             "axes.edgecolor": axes_edge_color,
             "axes.labelcolor": axes_label_color,
             "axes.linewidth": axes_line_width,
-            "axes.prop_cycle": color_cycle,
+            "axes.prop_cycle": prop_cycle,
             "xtick.color": x_tick_color,
             "ytick.color": y_tick_color,
             "legend.facecolor": legend_face_color,

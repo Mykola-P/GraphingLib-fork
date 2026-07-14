@@ -10,9 +10,24 @@ import os
 import sys
 import time
 
+import matplotlib
+
 from graphinglib import __version__
 
 sys.path.insert(0, os.path.abspath("sphinxext"))
+
+# The GraphingLib xkcd style resolves its hand-drawn fonts through the "fantasy"
+# generic font family, which matplotlib re-resolves at draw time. GraphingLib resets
+# rcParams to matplotlib defaults after each figure, and the sphinx plot directive
+# only saves figures after the plotted code has run, so the default fantasy list must
+# also prefer the xkcd fonts for the style showcase to render with the intended font.
+matplotlib.rcParamsDefault["font.fantasy"] = [
+    "xkcd",
+    "xkcd Script",
+    "Humor Sans",
+    "Comic Neue",
+    "Comic Sans MS",
+] + matplotlib.rcParamsDefault["font.fantasy"]
 
 project = "GraphingLib"
 copyright = f"2023-{time.strftime('%Y')}, Gustave Coulombe, Yannick Lapointe"
@@ -42,10 +57,16 @@ extensions = [
     "gallery_generator",
     "matplotlib.sphinxext.plot_directive",
     "release_notes_generator",
+    "sphinxext.opengraph",
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "release_notes/upcoming_changes/*.rst",
+]
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -61,8 +82,8 @@ html_theme_options = {
         "image_dark": "../images/GraphingLib-Logo-Bolder.svg",
         "image_light": "../images/GraphingLib-Logo-Bolder.svg",
     },
-    "pygment_light_style": "tango",
-    "pygment_dark_style": "github-dark",
+    "pygments_light_style": "tango",
+    "pygments_dark_style": "github-dark",
     "show_toc_level": 2,
     "show_prev_next": False,
     "switcher": {
@@ -112,3 +133,9 @@ numpydoc_show_class_members = False
 plot_include_source = True
 plot_html_show_source_link = False
 plot_pre_code = "import graphinglib as gl\nimport numpy as np"
+
+opg_site_url = "https://www.graphinglib.org/"
+opg_image = "https://raw.githubusercontent.com/GraphingLib/GraphingLib/main/images/opengraph_GL.PNG"
+opg_description = (
+    "GraphingLib : A Python library for creating publication-quality figures with ease."
+)

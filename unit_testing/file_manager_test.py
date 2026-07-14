@@ -5,10 +5,17 @@ from unittest.mock import MagicMock, patch
 import yaml
 from matplotlib import pyplot as plt
 
-from graphinglib.file_manager import (FileDeleter, FileLoader, FileSaver,
-                                      FileUpdater, get_color, get_colors,
-                                      get_default_style, get_styles,
-                                      set_default_style)
+from graphinglib.file_manager import (
+    FileDeleter,
+    FileLoader,
+    FileSaver,
+    FileUpdater,
+    get_color,
+    get_colors,
+    get_default_style,
+    get_styles,
+    set_default_style,
+)
 
 
 class TestFileLoader(unittest.TestCase):
@@ -189,14 +196,26 @@ class TestStyles(unittest.TestCase):
                         f"Style {style} is inconsistent with plain style: check for following keys: {res[2]}"
                     )
 
+    def test_xkcd_style_is_discovered(self):
+        self.assertIn("xkcd", get_styles(gl=True, customs=False))
+
     def _compare_dict_structure(self, dict1, dict2):
         keys1 = set(dict1.keys())
         keys2 = set(dict2.keys())
         if keys1 != keys2:
             return (False, None, keys1.symmetric_difference(keys2))
         for key in keys1:
+            if key == "rc_params":
+                # rc_params are free-form matplotlib settings: styles may set extra
+                # keys (e.g. path.sketch in the xkcd style), so only the presence of
+                # the section is enforced, mirroring FileUpdater which also skips it.
+                continue
             if isinstance(dict1[key], dict):
                 res = self._compare_dict_structure(dict1[key], dict2[key])
                 if not res[0]:
                     return (False, key, res[2])
         return (True, None, None)
+
+
+if __name__ == "__main__":
+    unittest.main()

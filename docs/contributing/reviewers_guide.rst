@@ -45,17 +45,18 @@ Release workflow
 Major/minor version release workflow
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Here are the step to make a major or minor release:
+Here are the step to make a major or minor release.
 
-1. Once a milestone is almost completed, a new branch ``maintenance/X.Y.x`` is created and the final preparations before the release will be merged into this branch and the ``vX.Y.0`` tag will be created from this branch.
-2. Update the documentation.
+1. Make sure that the version numbers in ``pyproject.toml``, ``setup.py`` and ``_version.py`` are consistent and correctly set to the version you're going to release (e.g. ``X.Y.0`` for a major/minor release). ``_version.py`` should still have the ``.dev`` suffix at this point.
+2. Once the milestone for the release is completed, create a new branch named ``maintenance/X.Y.x`` (last digit should literally be x, for example ``maintenance/1.2.x``) from ``main``. This branch will be used for the final release preparations and the ``vX.Y.0`` tag will eventually be created from this branch.
+3. Update the documentation and release notes on the ``maintenance/X.Y.x`` branch.
 
-   * Merge the previous ``doc/X.Y-1.Z`` branch into the branch you are going to tag on **without deleting** the branch.
+   * Merge the previous documentation branch (``doc/X.Y-1.Z``) branch into ``maintenance/X.Y.x``. **Do not delete** the old documentation branch.
    * Remove ``.dev`` from the ``__version__`` in ``_version.py``.
-   * If relevant, add a ``highlights.rst`` file with a bulleted list of highlights for the release.
+   * If relevant, add a highlights file at ``doc/release_notes/upcoming_changes/highlights.rst`` with a bulleted list of highlights for the release. The file should contain only a bulleted list of highlights for the release. Do not add a title or underline, since this is handled automatically.
    * Build the documentation site locally (:ref:`see how to build the documentation <builddoc>`)
-   * Empty the ``doc/release_notes/upcoming_changes`` directory.
-   * Update the ``switcher.json`` file to add a new documentation version with the following values: ::
+   * Delete the contents of the ``doc/release_notes/upcoming_changes`` directory, but keep the ``.gitkeep`` file.
+   * Update the ``switcher.json`` file to add a new documentation version entry with the following values: ::
      
        {
            "name": "X.Y",
@@ -64,29 +65,33 @@ Here are the step to make a major or minor release:
            "preferred": true
        }
     
-     Remove the ``"preferred": true`` for the previous version.
+     Remove the ``"preferred": true`` line from the previous version.
    * Rebuild the documentation to make sure it builds without problems.
 
-3. Draft a release on GitHub. Copy the release notes from the documentation and adapt the syntax for Markdown.
-4. Create the ``vX.Y.0`` tag.
-5. Merge the ``maintenance/X.Y.x`` (branch without deleting it) to the ``main`` branch. Bump version to ``X.Y+1.0`` (or ``X+1.0.0`` for major version) in ``pyproject.toml`` and ``setup.py``. Bump ``__version__`` to ``X.Y+1.0.dev`` in ``_version.py``.
-6. Create a new ``doc/X.Y.0`` branch from the ``maintenance/X.Y.0`` branch. Change the GraphingLib's source URL in ``requirements.txt`` to ``git+https://github.com/GraphingLib/GraphingLib@doc/X.Y.0``.
+4. Draft a release on GitHub by clicking on the "Draft a new release" button in the Releases section. For the tag, create a new ``vX.Y.0`` tag, and for the target, choose the ``maintenance/X.Y.x`` branch. Title should be ``GraphingLib X.Y.0 Release``. Copy the release notes from the documentation and adapt the syntax for Markdown.
+5. Merge the ``maintenance/X.Y.x`` branch back into ``main``, without deleting the maintenance branch. Then, on ``main``:
+
+   * In ``pyproject.toml`` and ``setup.py``, bump the version to the next minor version, ``X.Y+1.0``, or to ``X+1.0.0`` for a major version bump.
+   * In ``graphinglib/_version.py``, bump ``__version__`` to ``X.Y+1.0.dev``.
+   * Run ``uv lock`` to update the lock file with the new version.
+
+6. Create a new ``doc/X.Y.0`` branch from the ``maintenance/X.Y.x`` branch. In the new doc branch, change GraphingLib's source URL in ``docs/requirements.txt`` to ``git+https://github.com/GraphingLib/GraphingLib@doc/X.Y.0``.
 7. Manually trigger a build of the "latest" version on *Read the Docs* to update the project. Activate the version ``doc/X.Y.0`` and make it the default version in the admin settings.
-8. Bump ``__version__`` to ``X.Y.1`` in ``_version.py``. 
+8. And finally, in the ``maintenance/X.Y.x`` branch, bump ``__version__`` to ``X.Y.1`` in ``_version.py``.
 
 Patch version release workflow
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. attention::
 
-    For a patch release, no updates are made on the ``main`` branch. If a bug correction has to be also applied to the next major/minor release, add an issue so that it is modified in the ``main`` branch. Unfortunately we don't have an automatic backporting method as of now.  
+    For a patch release, no updates are made on the ``main`` branch. If a bug correction has to be also applied to the next major/minor release see :ref:`the section on backporting <backporting>`.
 
-Here are the step to make a patch release:
+Here are the steps to make a patch release:
 
 1. Update the documentation.
 
    * Merge the previous ``doc/X.Y.Z-1`` branch into the ``maintenance/X.Y.x`` branch and **delete** the old documentation branch
-   * Bump ``__version__`` from ``X.Y.Z-1`` to ``X.Y.Z`` in ``_version.py``.
+   * Remove ``.dev`` from the ``__version__`` in ``_version.py``.
    * Build the documentation site locally (:ref:`see how to build the documentation <builddoc>`)
    * If relevant, add a ``highlights.rst`` file with a bulleted list of highlights for the release.
    * Empty the ``doc/release_notes/upcoming_changes`` directory.
@@ -96,5 +101,41 @@ Here are the step to make a patch release:
 2. Draft a release on GitHub. Copy the release notes from the documentation and adapt the syntax for Markdown.
 3. Create the ``vX.Y.Z`` tag.
 4. Create a new ``doc/X.Y.Z`` branch from the ``maintenance/X.Y.Z`` branch.
-5. Bump version to ``X.Y.Z+1`` in ``pyproject.toml`` and ``setup.py``
+5. Bump version to ``X.Y.Z+1`` in ``pyproject.toml`` and ``setup.py`` in the ``maintenance/X.Y.Z`` branch.
 6. Manually trigger a build of the "latest" version on *Read the Docs* to update the project. If the version ``doc-X.Y.Z-1`` is still active, deactivate it. Activate the ``doc-X.Y.Z`` version. If this patch release is on the **latest major/minor version**, set this new version as default in admin settings, else no changes necessary.
+
+.. _backporting:
+
+Backporting changes to other branches
+-------------------------------------
+
+In the case of bug fixes made in a ``maintenance/X.Y.Z`` branch, the fix most likely has to be made in the ``main`` branch. This is where backporting comes in: you can "copy-paste" commits from the maintenance branch to the main branch by using ``git cherry-pick``.
+
+.. warning::
+
+   Using ``git cherry-pick`` can cause chaos in a repository if not used properly. Prioritise merging instead of cherry-picking whenever possible.
+
+Here is a case where merging is not possible and cherry-picking has to be used ::
+
+    main --- A --- B --- F --- G --- H
+                    \
+    maintenance      C --- D --- E
+
+Say in this case, we are working on the ``main`` branch, adding features for the next minor/major release, and we find a bug in the code dating back to before the divergence of the ``maintenance`` branch. In this case, we could fix the bug in the ``main`` branch, say in commit ``H``, but to apply those changes in the maintenance branch **without** adding any new features developped on the ``main`` branch, say commits ``F`` and ``G``, we use cherry-picking.
+
+First, make sure you checkout the ``maintenance`` branch in which you want to move the commit containing the bugfix ::
+
+    git checkout maintenance
+
+Next, cherry-pick the commit by using its hash (which you can find using ``git log`` for example) ::
+
+    git cherry-pick H
+
+At this point it is possible that there will be conflicts for you to resolve. Once the conflicts are resolved, you should have the following branch graph ::
+
+    main --- A --- B --- F --- G --- H
+                    \
+    maintenance      C --- D --- E --- H
+                                       ^
+                                applied bugfix
+

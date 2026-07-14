@@ -224,6 +224,67 @@ Since :class:`~graphinglib.shapes.Circle` objects actually inherit from :class:`
     print(circle.area)
     print(circle.perimeter)
 
+The :class:`~graphinglib.shapes.Ellipse` Object
+-----------------------------------------------
+
+The :class:`~graphinglib.shapes.Ellipse` class is similar to :class:`~graphinglib.shapes.Circle`, but allows you to specify different radii for the x and y axes. You can also apply a rotation angle to the ellipse. Create an Ellipse by specifying its center point, x radius, and y radius:
+
+.. plot::
+
+    ellipse = gl.Ellipse(x_center=0, y_center=0, x_radius=10, y_radius=5)
+
+The key differences between :class:`~graphinglib.shapes.Ellipse` and :class:`~graphinglib.shapes.Circle` are:
+
+- **Two independent radii**: Use ``x_radius`` and ``y_radius`` instead of a single ``radius`` parameter
+- **Optional rotation**: You can rotate the ellipse using the ``angle`` parameter (in degrees)
+- **Width and height properties**: Access or set dimensions via ``width`` (2 × x_radius) and ``height`` (2 × y_radius)
+
+Here is an example with different ellipses:
+
+.. plot::
+
+    ellipse1 = gl.Ellipse(
+        x_center=-5,
+        y_center=5,
+        x_radius=8,
+        y_radius=4,
+        fill_color="C1",
+        edge_color="C1",
+        line_width=2,
+        fill=True,
+        fill_alpha=0.7,
+    )
+
+    ellipse2 = gl.Ellipse(
+        x_center=5,
+        y_center=5,
+        x_radius=6,
+        y_radius=3,
+        fill_color="C0",
+        edge_color="C0",
+        line_width=2,
+        fill=True,
+        fill_alpha=0.7,
+        angle=30,  # Rotated by 30 degrees
+    )
+
+    ellipse3 = gl.Ellipse(
+        x_center=0,
+        y_center=-3,
+        x_radius=6,
+        y_radius=4,
+        edge_color="C2",
+        line_width=3,
+        fill=False,
+        angle=45,
+    )
+
+    figure = gl.Figure(x_lim=(-15, 15), y_lim=(-10, 10), aspect_ratio=1)
+    figure.add_elements(ellipse1, ellipse2, ellipse3)
+    figure.show()
+
+Like Circles, Ellipse objects inherit from :class:`~graphinglib.shapes.Polygon` and use point approximation, so circumference and area calculations are approximations. The ``number_of_points`` parameter can be adjusted for better accuracy.
+
 The :class:`~graphinglib.shapes.Arrow` Object
 ----------------------------------------------
 
@@ -261,12 +322,12 @@ You can customize the appearance of Arrows by specifying the following optional 
     )
 
     # Create points at the start and end of the arrows (to illustrate the shrinking)
-    point1 = gl.Point(0, 0, color="C0")
-    point2 = gl.Point(1, 0, color="C1")
-    point3 = gl.Point(2, 0, color="C2")
-    point4 = gl.Point(1, 1, color="C0")
-    point5 = gl.Point(2, 1, color="C1")
-    point6 = gl.Point(3, 1, color="C2")
+    point1 = gl.Point(0, 0, face_color="C0")
+    point2 = gl.Point(1, 0, face_color="C1")
+    point3 = gl.Point(2, 0, face_color="C2")
+    point4 = gl.Point(1, 1, face_color="C0")
+    point5 = gl.Point(2, 1, face_color="C1")
+    point6 = gl.Point(3, 1, face_color="C2")
 
     fig = gl.Figure(y_lim=(-0.5, 1.5), x_lim=(-0.5, 3.5))
     fig.add_elements(arrow1, arrow2, arrow3)
@@ -291,7 +352,7 @@ It is possible to change the width of the line with the ``width`` parameter. The
     circle = gl.Circle(0, 0, 1, line_width=2, edge_color="C0", fill_color="C0")
     center = gl.Point(0, 0, marker_size=50)
     point = gl.Point(1, 0, marker_size=50)
-    
+
     # Adding a line to display the radius of the circle
     line = gl.Line(
         (0, 0.07), (point.x, point.y + 0.07), capped_line=True, cap_width=1

@@ -1,16 +1,24 @@
 import unittest
 
-from numpy import exp, linspace, log, pi, sin
+import numpy as np
 
-from graphinglib.data_plotting_1d import *
-from graphinglib.fits import (FitFromExponential, FitFromFunction,
-                              FitFromGaussian, FitFromLog, FitFromPolynomial,
-                              FitFromSine, FitFromSquareRoot)
+from graphinglib.data_plotting_1d import Curve, Scatter
+from graphinglib.exceptions import PlottingError
+from graphinglib.fits import (
+    FitFromExponential,
+    FitFromFOTF,
+    FitFromFunction,
+    FitFromGaussian,
+    FitFromLog,
+    FitFromPolynomial,
+    FitFromSine,
+    FitFromSquareRoot,
+)
 
 
 class TestFitFromPolynomial(unittest.TestCase):
     def setUp(self):
-        x = linspace(-3, 3 * pi, 1000)
+        x = np.linspace(-3, 3 * np.pi, 1000)
         self.scatter_first_degree = Scatter(x, 3 * x + 2, "k", "Test Curve")
         self.scatter_second_degree = Scatter(x, 4 * x**2 - 3 * x - 2, "k", "Test Curve")
         self.fit_first_degree = FitFromPolynomial(
@@ -23,6 +31,14 @@ class TestFitFromPolynomial(unittest.TestCase):
     def test_first_degree_coeffs(self):
         self.assertListEqual(
             [round(i, 5) for i in list(self.fit_first_degree._coeffs)], [2, 3]
+        )
+
+    def test_parameters_property(self):
+        # Regression test: this used to raise AttributeError once `parameters` was
+        # centralized onto GeneralFit, since this class stores its fit output in
+        # `_coeffs`, not `_parameters`.
+        self.assertListEqual(
+            [round(i, 5) for i in list(self.fit_first_degree.parameters)], [2, 3]
         )
 
     def test_first_degree_cov(self):
@@ -136,25 +152,40 @@ class TestFitFromPolynomial(unittest.TestCase):
         self.assertEqual(copy._color, self.fit_first_degree._color)
         self.assertEqual(copy._label, self.fit_first_degree._label)
 
+    def test_get_rsquared_perfect_fit(self):
+        self.assertAlmostEqual(self.fit_first_degree.get_Rsquared(), 1.0)
+
+    def test_get_rsquared_constant_data(self):
+        # Regression test: used to silently divide by zero (nan/inf with a RuntimeWarning)
+        # when the fitted data has zero variance.
+        x = np.linspace(-3, 3, 100)
+        flat_scatter = Scatter(x, np.full_like(x, 5.0), "k", "Flat")
+        flat_fit = FitFromPolynomial(flat_scatter, 0, "k", "Constant fit")
+        self.assertAlmostEqual(flat_fit.get_Rsquared(), 1.0)
+
 
 class TestFitFromSine(unittest.TestCase):
     def setUp(self):
-        x = linspace(0, 3 * pi, 1000)
-        self.data = Scatter(x, 2 * sin(3 * x + 4) + 5, "k", "Data")
+        x = np.linspace(0, 3 * np.pi, 1000)
+        self.data = Scatter(x, 2 * np.sin(3 * x + 4) + 5, "k", "Data")
         self.fit = FitFromSine(
             self.data, "Sinusoidal fit", guesses=[2.09, 3.1, 4.2, 5.2]
         )
 
+    def test_non_convergence_raises_plotting_error(self):
+        # A fit that cannot converge surfaces as a GraphingLib PlottingError with context,
+        # not a bare scipy RuntimeError. It stays catchable as RuntimeError.
+        noise = Scatter(np.linspace(0, 10, 50), np.random.rand(50), "k", "Noise")
+        with self.assertRaises(PlottingError):
+            FitFromSine(noise, guesses=[1, 1, 1, 1], max_iterations=1)
+        with self.assertRaises(RuntimeError):
+            FitFromSine(noise, guesses=[1, 1, 1, 1], max_iterations=1)
+
     def test_parameters(self):
-        self.assertListEqual(
-            [
-                self.fit._amplitude,
-                self.fit._frequency_rad,
-                self.fit._phase_rad,
-                self.fit._vertical_shift,
-            ],
-            [2, 3, 4, 5],
-        )
+        self.assertAlmostEqual(self.fit._amplitude, 2.000, places=7)
+        self.assertAlmostEqual(self.fit._frequency_rad, 3.000, places=7)
+        self.assertAlmostEqual(self.fit._phase_rad, 4.000, places=7)
+        self.assertAlmostEqual(self.fit._vertical_shift, 5.000, places=7)
 
     def test_cov(self):
         self.assertIsInstance(self.fit._cov_matrix, np.ndarray)
@@ -233,8 +264,8 @@ class TestFitFromSine(unittest.TestCase):
 
 class TestFitFromExponential(unittest.TestCase):
     def setUp(self):
-        x = linspace(0, 10, 1000)
-        self.data = Scatter(x, 2 * exp(3 * x + 4), "Data")
+        x = np.linspace(0, 10, 1000)
+        self.data = Scatter(x, 2 * np.exp(3 * x + 4), "Data")
         self.fit = FitFromExponential(
             self.data, "Sinusoidal fit", guesses=[2.09, 3.1, 4.01]
         )
@@ -286,7 +317,7 @@ class TestFitFromExponential(unittest.TestCase):
 
     def test_area_between(self):
         curve1 = Curve.from_function(
-            lambda x: 2 * exp(3 * x + 4), -0.1, 1.1, number_of_points=10000
+            lambda x: 2 * np.exp(3 * x + 4), -0.1, 1.1, number_of_points=10000
         )
         fit = FitFromExponential(curve1, "Exponential fit")
         self.assertAlmostEqual(fit.get_area_between(0, 1), 694.69, places=0)
@@ -318,7 +349,7 @@ class TestFitFromExponential(unittest.TestCase):
 
 class TestFitFromGaussian(unittest.TestCase):
     def setUp(self) -> None:
-        x = linspace(-4, 6, 1000)
+        x = np.linspace(-4, 6, 1000)
         self.data = Scatter(x, 5 * np.exp(-(((x - 1) / 1) ** 2) / 2), "Data")
         self.fit = FitFromGaussian(self.data, "Gaussian fit")
 
@@ -335,8 +366,17 @@ class TestFitFromGaussian(unittest.TestCase):
         self.assertIsInstance(self.fit._standard_deviation_of_fit_params, np.ndarray)
         self.assertEqual(self.fit._standard_deviation_of_fit_params.shape, (3,))
 
+    def test_negative_std_dev_guess_does_not_raise(self):
+        # Regression test: bounds=(...) added to keep standard_deviation positive used
+        # to reject any negative initial guess outright instead of just the fitted result.
+        guesses = np.array([5.0, 1.0, -1.0])
+        fit = FitFromGaussian(self.data, guesses=guesses)
+        self.assertAlmostEqual(fit.standard_deviation, 1, places=2)
+        # The caller's array must not be mutated by the guess repair.
+        self.assertListEqual(list(guesses), [5.0, 1.0, -1.0])
+
     def test_str(self):
-        self.assertEqual(str(self.fit), "$\mu = 1.000, \sigma = 1.000, A = 5.000$")
+        self.assertEqual(str(self.fit), r"$\mu = 1.000, \sigma = 1.000, A = 5.000$")
 
     def test_function(self):
         self.assertAlmostEqual(self.fit._function(3), 0.676515, places=3)
@@ -399,7 +439,7 @@ class TestFitFromGaussian(unittest.TestCase):
 
 class TestFitFromSquareRoot(unittest.TestCase):
     def setUp(self) -> None:
-        x = linspace(-1, 6, 1000)
+        x = np.linspace(-1, 6, 1000)
         self.data = Scatter(x, 3 * np.sqrt(x + 4) + 5, "Data")
         self.fit = FitFromSquareRoot(self.data, "Square root fit")
 
@@ -414,6 +454,16 @@ class TestFitFromSquareRoot(unittest.TestCase):
     def test_std_dev(self):
         self.assertIsInstance(self.fit._standard_deviation, np.ndarray)
         self.assertEqual(self.fit._standard_deviation.shape, (3,))
+
+    def test_cov_matrix_property(self):
+        # Regression test: this property used to recurse into itself infinitely.
+        self.assertIsInstance(self.fit.cov_matrix, np.ndarray)
+        self.assertEqual(self.fit.cov_matrix.shape, (3, 3))
+
+    def test_standard_deviation_property(self):
+        # Regression test: this property used to recurse into itself infinitely.
+        self.assertIsInstance(self.fit.standard_deviation, np.ndarray)
+        self.assertEqual(self.fit.standard_deviation.shape, (3,))
 
     def test_str(self):
         self.assertEqual(str(self.fit), "$3.000 \\sqrt{x + 4.000} + 5.000$")
@@ -474,8 +524,8 @@ class TestFitFromSquareRoot(unittest.TestCase):
 
 class TestFitFromLog(unittest.TestCase):
     def setUp(self):
-        x = linspace(0, 10, 1000)
-        self.data = Scatter(x, 2 * log(x + 3) + 4, "Data")
+        x = np.linspace(0, 10, 1000)
+        self.data = Scatter(x, 2 * np.log(x + 3) + 4, "Data")
         self.fit = FitFromLog(self.data, "Logarithmic fit")
 
     def test_parameters(self):
@@ -552,7 +602,7 @@ class TestFitFromLog(unittest.TestCase):
 
 class TestFitFromFunction(unittest.TestCase):
     def setUp(self):
-        x = linspace(1, 10, 1000)
+        x = np.linspace(1, 10, 1000)
         self.data = Scatter(x, 1 / x + 3 * x, "Data")
         self.fit = FitFromFunction(lambda x, a, b: a / x + b * x, self.data)
 
@@ -567,6 +617,14 @@ class TestFitFromFunction(unittest.TestCase):
     def test_std_dev(self):
         self.assertIsInstance(self.fit._standard_deviation, np.ndarray)
         self.assertEqual(self.fit._standard_deviation.shape, (2,))
+
+    def test_str(self):
+        # Regression test: this used to raise NotImplementedError.
+        self.assertEqual(str(self.fit), "Fit from function: <lambda>")
+
+    def test_default_label(self):
+        # Regression test: this used to be the literal string "None".
+        self.assertEqual(self.fit.label, "Fit from function: <lambda>")
 
     def test_function(self):
         self.assertAlmostEqual(self.fit._function(1), 4, places=3)
@@ -614,3 +672,78 @@ class TestFitFromFunction(unittest.TestCase):
         )
         self.assertEqual(copy._color, self.fit._color)
         self.assertEqual(copy._label, self.fit._label)
+
+
+class TestFitFromFOTF(unittest.TestCase):
+    def setUp(self) -> None:
+        x = np.linspace(0, 20, 1000)
+        self.data = Scatter(x, 5 * (1 - np.exp(-x / 3)), "Data")
+        self.fit = FitFromFOTF(self.data, "FOTF fit")
+
+    def test_parameters(self):
+        rounded_params = [round(i, 3) for i in list(self.fit._parameters)]
+        self.assertListEqual(rounded_params, [5, 3])
+
+    def test_cov(self):
+        self.assertIsInstance(self.fit._cov_matrix, np.ndarray)
+        self.assertEqual(self.fit._cov_matrix.shape, (2, 2))
+
+    def test_std_dev(self):
+        self.assertIsInstance(self.fit._standard_deviation, np.ndarray)
+        self.assertEqual(self.fit._standard_deviation.shape, (2,))
+
+    def test_cov_matrix_property(self):
+        self.assertIsInstance(self.fit.cov_matrix, np.ndarray)
+        self.assertEqual(self.fit.cov_matrix.shape, (2, 2))
+
+    def test_standard_deviation_property(self):
+        self.assertIsInstance(self.fit.standard_deviation, np.ndarray)
+        self.assertEqual(self.fit.standard_deviation.shape, (2,))
+
+    def test_gain(self):
+        self.assertAlmostEqual(self.fit.gain, 5, places=3)
+
+    def test_time_constant(self):
+        self.assertAlmostEqual(self.fit.time_constant, 3, places=3)
+
+    def test_str(self):
+        self.assertEqual(str(self.fit), "$K = 5.000, \\tau = 3.000$")
+
+    def test_function(self):
+        self.assertAlmostEqual(self.fit._function(3), 3.161, places=3)
+
+    def test_get_coordinates_at_x(self):
+        self.assertAlmostEqual(self.fit.get_coordinates_at_x(3)[1], 3.161, places=3)
+
+    def test_create_point_at_x(self):
+        self.assertAlmostEqual(self.fit.create_point_at_x(3)._y, 3.161, places=3)
+
+    def test_get_derivative_curve(self):
+        self.assertIsInstance(self.fit.create_derivative_curve(), Curve)
+
+    def test_get_integral_curve(self):
+        self.assertIsInstance(self.fit.create_integral_curve(), Curve)
+
+    def test_negative_time_constant_guess_does_not_raise(self):
+        # Regression test: bounds=(...) added to keep time_constant positive used to
+        # reject any negative initial guess outright instead of just the fitted result.
+        guesses = np.array([5.0, -3.0])
+        fit = FitFromFOTF(self.data, guesses=guesses)
+        self.assertAlmostEqual(fit.time_constant, 3, places=3)
+        # The caller's array must not be mutated by the guess repair.
+        self.assertListEqual(list(guesses), [5.0, -3.0])
+
+    def test_copy(self):
+        copy = self.fit.copy()
+        self.assertEqual(list(copy._parameters), list(self.fit._parameters))
+        self.assertEqual(copy._cov_matrix.tolist(), self.fit._cov_matrix.tolist())
+        self.assertEqual(
+            copy._standard_deviation.tolist(),
+            self.fit._standard_deviation.tolist(),
+        )
+        self.assertEqual(copy._color, self.fit._color)
+        self.assertEqual(copy._label, self.fit._label)
+
+
+if __name__ == "__main__":
+    unittest.main()

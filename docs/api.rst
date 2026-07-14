@@ -18,6 +18,15 @@ Figure and MultiFigure
     Figure
     MultiFigure
 
+.. autosummary::
+    :toctree: generated/
+    :template: smart_figure_classes
+    :nosignatures:
+
+    SmartFigure
+    SmartFigureWCS
+    SmartTwinAxis
+
 Plottables
 ----------
 
@@ -30,6 +39,7 @@ Plottables
     Circle
     Contour
     Curve
+    Ellipse
     FitFromExponential
     FitFromFOTF
     FitFromFunction
@@ -42,6 +52,7 @@ Plottables
     Histogram
     Hlines
     Line
+    PlottableAxMethod
     Point
     Polygon
     Rectangle
@@ -51,6 +62,17 @@ Plottables
     Text
     VectorField
     Vlines
+
+Legend elements
+---------------
+.. autosummary::
+    :toctree: generated/
+    :template: class
+    :nosignatures:
+
+    LegendLine
+    LegendMarker
+    LegendPatch
 
 Utility functions
 -----------------
@@ -64,3 +86,32 @@ Utility functions
     get_default_style
     get_styles
     set_default_style
+
+Tools
+-----
+.. autosummary::
+    :toctree: generated/
+    :template: class
+    :nosignatures:
+
+    MathematicalObject
+
+Errors
+------
+Every exception GraphingLib raises derives from :class:`GraphingLibError` (also available
+under its alias ``GraphingException``), so ``except graphinglib.GraphingException`` catches
+anything the library raises. Most also derive from the matching built-in exception
+(``ValueError``, ``TypeError``, ...), so existing ``except ValueError`` / ``except TypeError``
+code keeps working too.
+
+.. autoexception:: GraphingLibError
+.. autoexception:: InvalidParameterError
+.. autoexception:: InvalidParameterTypeError
+.. autoexception:: IncompatibleArgumentsError
+.. autoexception:: InvalidOperationError
+.. autoexception:: LayoutError
+.. autoexception:: StyleNotFoundError
+.. autoexception:: StyleFileError
+.. autoexception:: MissingOptionalDependencyError
+.. autoexception:: UnsupportedFeatureError
+.. autoexception:: PlottingError

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from functools import partial
-from typing import Callable, Literal, Optional
+from inspect import signature
+from typing import Any, Callable, Optional, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,12 +11,46 @@ from numpy.typing import ArrayLike
 from scipy.optimize import curve_fit
 
 from .data_plotting_1d import Curve, Scatter
+from .exceptions import InvalidParameterError, PlottingError
 from .graph_elements import Point
+from .inherit import INHERIT, Inherit, Styled, strip_inherit
 
 try:
     from typing import Self
 except ImportError:
     from typing_extensions import Self
+
+
+def _run_curve_fit(func, x_data, y_data, **kwargs):
+    """
+    Runs ``scipy.optimize.curve_fit`` and wraps any failure with GraphingLib context.
+
+    A non-converging fit otherwise surfaces as a bare scipy ``RuntimeError`` with no
+    indication that it came from a GraphingLib fit.
+    """
+    try:
+        return curve_fit(func, x_data, y_data, **kwargs)
+    except Exception as exc:
+        raise PlottingError(
+            f"The curve fit did not succeed ({exc}). Try adjusting the initial guesses "
+            "or increasing the maximum number of iterations."
+        ) from exc
+
+
+def _repair_positive_guess(
+    guesses: ArrayLike, index: int, number_of_parameters: int
+) -> np.ndarray:
+    """
+    Copies the initial guesses and forces the guess of a bounded parameter to be strictly positive.
+    """
+    guesses = np.array(guesses, dtype=float)
+    if guesses.shape != (number_of_parameters,):
+        raise InvalidParameterError(
+            f"Expected {number_of_parameters} initial guesses, "
+            f"but got an array of shape {guesses.shape}."
+        )
+    guesses[index] = max(abs(guesses[index]), 1e-10)
+    return guesses
 
 
 class GeneralFit(Curve):
@@ -35,19 +70,33 @@ class GeneralFit(Curve):
         Default depends on the ``figure_style`` configuration.
     line_width : int
         Line width of the curve.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str
         Line style of the curve.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the curve.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
     """
 
     def __init__(
         self,
         curve_to_be_fit: Curve | Scatter,
         label: Optional[str] = None,
-        color: str = "default",
-        line_width: int | Literal["default"] = "default",
-        line_style: str = "default",
+        color: str | Inherit = INHERIT,
+        line_width: int | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
     ) -> None:
         """
         Parameters
@@ -61,10 +110,23 @@ class GeneralFit(Curve):
             Default depends on the ``figure_style`` configuration.
         line_width : int
             Line width of the curve.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str
             Line style of the curve.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the curve.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
         """
         self._curve_to_be_fit = curve_to_be_fit
         self._color = color
@@ -74,8 +136,12 @@ class GeneralFit(Curve):
         else:
             self._label = "$f(x) = $" + str(self)
         self._line_style = line_style
+        self._alpha = alpha
 
-        self._function: Callable[[np.ndarray], np.ndarray]
+        self._function: Callable[[float | np.ndarray], float | np.ndarray]
+        self._parameters: np.ndarray
+        self._cov_matrix: np.ndarray
+        self._standard_deviation: np.ndarray
 
         self._setup_attributes()
 
@@ -87,10 +153,10 @@ class GeneralFit(Curve):
         self._res_line_style = None
 
         self._show_errorbars: bool = False
-        self._errorbars_color = None
-        self._errorbars_line_width = None
-        self._cap_thickness = None
-        self._cap_width = None
+        self._errorbars_color: Styled[str | None] = None
+        self._errorbars_line_width: Styled[float | None] = None
+        self._cap_thickness: Styled[float | None] = None
+        self._cap_width: Styled[float | None] = None
 
         self._show_error_curves: bool = False
         self._error_curves_fill_between: bool = False
@@ -111,8 +177,20 @@ class GeneralFit(Curve):
         self._curve_to_be_fit = curve
 
     @property
-    def function(self) -> Callable[[np.ndarray], np.ndarray]:
+    def function(self) -> Callable[[float | np.ndarray], float | np.ndarray]:
         return self._function
+
+    @property
+    def parameters(self) -> np.ndarray:
+        return self._parameters
+
+    @property
+    def cov_matrix(self) -> np.ndarray:
+        return self._cov_matrix
+
+    @property
+    def standard_deviation(self) -> np.ndarray:
+        return self._standard_deviation
 
     def __str__(self) -> str:
         """
@@ -120,18 +198,26 @@ class GeneralFit(Curve):
         """
         raise NotImplementedError()
 
-    def get_coordinates_at_x(self, x: float) -> tuple[float, float]:
-        return (x, self._function(x))
+    def _evaluate_scalar(self, x: float) -> float:
+        value = self._function(x)
+        return float(np.asarray(value).flat[0])
+
+    def get_coordinates_at_x(
+        self, x: float, interpolation_method: str = "linear"
+    ) -> tuple[float, float]:
+        return (x, self._evaluate_scalar(x))
 
     def create_point_at_x(
         self,
         x: float,
+        interpolation_method: str = "linear",
         label: str | None = None,
-        color: str = "default",
-        edge_color: str = "default",
-        marker_size: float | Literal["default"] = "default",
-        marker_style: str = "default",
-        line_width: float | Literal["default"] = "default",
+        face_color: str | Inherit = INHERIT,
+        edge_color: str | Inherit = INHERIT,
+        marker_size: float | Inherit = INHERIT,
+        marker_style: str | Inherit = INHERIT,
+        line_width: float | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
     ) -> Point:
         """
         Gets the point on the curve at a given x value.
@@ -140,9 +226,13 @@ class GeneralFit(Curve):
         ----------
         x : float
             x value of the point.
+        interpolation_method : str
+            Interpolation method parameter.
+            Since fit curves are analytic, this value is ignored.
+            Default is ``"linear"``.
         label : str, optional
             Label to be displayed in the legend.
-        color : str
+        face_color : str
             Face color of the point.
             Default depends on the ``figure_style`` configuration.
         edge_color : str
@@ -150,13 +240,28 @@ class GeneralFit(Curve):
             Default depends on the ``figure_style`` configuration.
         marker_size : float
             Size of the point.
+            Typical range is ``10`` to ``100``.
             Default depends on the ``figure_style`` configuration.
         marker_style : str
             Style of the point.
+            Common values include ``"."``, ``","``, ``"o"``, ``"v"``, ``"^"``, ``"<"``, ``">"``, ``"s"``,
+            ``"p"``, ``"*"``, ``"h"``, ``"H"``, ``"+"``, ``"x"``, ``"D"``, ``"d"``, ``"|"``, ``"_"``,
+            ``"P"``, ``"X"``, ``"None"``, ``" "``, and ``""``.
             Default depends on the ``figure_style`` configuration.
         line_width : float
             Width of the edge of the point.
+            Typical range is ``0`` to ``3`` points.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the point.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Returns
         -------
@@ -164,13 +269,14 @@ class GeneralFit(Curve):
         """
         return Point(
             x,
-            self._function(x),
+            self._evaluate_scalar(x),
             label=label,
-            color=color,
+            face_color=face_color,
             edge_color=edge_color,
             marker_size=marker_size,
             marker_style=marker_style,
             edge_width=line_width,
+            alpha=alpha,
         )
 
     def get_coordinates_at_y(
@@ -181,13 +287,14 @@ class GeneralFit(Curve):
     def create_points_at_y(
         self,
         y: float,
-        interpolation_kind: str = "linear",
+        interpolation_method: str = "linear",
         label: str | None = None,
-        color: str = "default",
-        edge_color: str = "default",
-        marker_size: float | Literal["default"] = "default",
-        marker_style: str = "default",
-        line_width: float | Literal["default"] = "default",
+        face_color: str | Inherit = INHERIT,
+        edge_color: str | Inherit = INHERIT,
+        marker_size: float | Inherit = INHERIT,
+        marker_style: str | Inherit = INHERIT,
+        line_width: float | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
     ) -> list[Point]:
         """
         Creates the Points on the curve at a given y value.
@@ -196,12 +303,12 @@ class GeneralFit(Curve):
         ----------
         y : float
             y value of the point.
-        interpolation_kind : str
+        interpolation_method : str
             Kind of interpolation to be used.
             Default is "linear".
         label : str, optional
             Label to be displayed in the legend.
-        color : str
+        face_color : str
             Face color of the point.
             Default depends on the ``figure_style`` configuration.
         edge_color : str
@@ -209,30 +316,46 @@ class GeneralFit(Curve):
             Default depends on the ``figure_style`` configuration.
         marker_size : float
             Size of the point.
+            Typical range is ``10`` to ``100``.
             Default depends on the ``figure_style`` configuration.
         marker_style : str
             Style of the point.
+            Common values include ``"."``, ``","``, ``"o"``, ``"v"``, ``"^"``, ``"<"``, ``">"``, ``"s"``,
+            ``"p"``, ``"*"``, ``"h"``, ``"H"``, ``"+"``, ``"x"``, ``"D"``, ``"d"``, ``"|"``, ``"_"``,
+            ``"P"``, ``"X"``, ``"None"``, ``" "``, and ``""``.
             Default depends on the ``figure_style`` configuration.
         line_width : float
             Width of the edge of the point.
+            Typical range is ``0`` to ``3`` points.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the point.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Returns
         -------
         list[:class:`~graphinglib.graph_elements.Point`]
             List of :class:`~graphinglib.graph_elements.Point` objects on the curve at the given y value.
         """
-        coord_pairs = self.get_coordinates_at_y(y, interpolation_kind)
+        coord_pairs = self.get_coordinates_at_y(y, interpolation_method)
         points = [
             Point(
                 coord[0],
                 coord[1],
                 label=label,
-                color=color,
+                face_color=face_color,
                 edge_color=edge_color,
                 marker_size=marker_size,
                 marker_style=marker_style,
                 edge_width=line_width,
+                alpha=alpha,
             )
             for coord in coord_pairs
         ]
@@ -247,8 +370,9 @@ class GeneralFit(Curve):
             "color": self._color,
             "linewidth": self._line_width,
             "linestyle": self._line_style,
+            "alpha": self._alpha,
         }
-        params = {key: value for key, value in params.items() if value != "default"}
+        params = strip_inherit(params)
         (self.handle,) = axes.plot(
             self._x_data,
             self._y_data,
@@ -266,8 +390,9 @@ class GeneralFit(Curve):
                 "color": self._res_color,
                 "linewidth": self._res_line_width,
                 "linestyle": self._res_line_style,
+                "alpha": self._alpha,
             }
-            params = {key: value for key, value in params.items() if value != "default"}
+            params = strip_inherit(params)
             axes.plot(
                 self._x_data,
                 y_fit_minus_std,
@@ -285,15 +410,15 @@ class GeneralFit(Curve):
             if self._fill_between_color:
                 kwargs["color"] = self._fill_between_color
             else:
-                kwargs["color"] = self.handle[0].get_color()
-            params = {key: value for key, value in kwargs.items() if value != "default"}
+                kwargs["color"] = self.handle.get_color()
+            params = strip_inherit(kwargs)
             axes.fill_between(
                 self._x_data,
                 self._y_data,
                 where=np.logical_and(
                     self._x_data >= self._fill_between_bounds[0],
                     self._x_data <= self._fill_between_bounds[1],
-                ),
+                ).tolist(),
                 zorder=z_order - 2,
                 **params,
             )
@@ -301,9 +426,9 @@ class GeneralFit(Curve):
     def show_residual_curves(
         self,
         sigma_multiplier: float = 1,
-        color: str = "default",
-        line_width: float | Literal["default"] = "default",
-        line_style: str = "default",
+        color: str | Inherit = INHERIT,
+        line_width: float | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
     ) -> None:
         """
         Displays two curves ``"sigma_multiplier"`` standard deviations above and below the fit curve.
@@ -318,7 +443,19 @@ class GeneralFit(Curve):
             Default depends on the ``figure_style`` configuration.
         line_width : float
             Line width of the residual curves.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
+        line_style : str
+            Line style of the residual curves.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
+            Default depends on the ``figure_style`` configuration.
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
         """
         self._res_curves_to_be_plotted = True
         self._res_sigma_multiplier = sigma_multiplier
@@ -348,14 +485,17 @@ class GeneralFit(Curve):
         Rsquared : float
             :math:`R^2` value
         """
-        Rsquared = 1 - (
-            np.sum(self.get_residuals() ** 2)
-            / np.sum(
-                (self._curve_to_be_fit._y_data - np.mean(self._curve_to_be_fit._y_data))
-                ** 2
-            )
-        )
-        return Rsquared
+        y_data = self._curve_to_be_fit._y_data
+        total_variance = np.sum((y_data - np.mean(y_data)) ** 2)
+        if total_variance == 0:
+            # Scale the tolerance to the data's own magnitude, since comparing residuals
+            # to an absolute tolerance of 0 makes np.allclose's rtol term vanish. Only
+            # fall back to an absolute tolerance when the data is identically zero.
+            magnitude = np.max(np.abs(y_data))
+            scale = magnitude if magnitude > 0 else 1.0
+            is_exact_fit = np.allclose(self.get_residuals(), 0, atol=1e-8 * scale)
+            return 1.0 if is_exact_fit else float("nan")
+        return 1 - np.sum(self.get_residuals() ** 2) / total_variance
 
     def copy(self) -> Self:
         return deepcopy(self)
@@ -381,10 +521,23 @@ class FitFromPolynomial(GeneralFit):
         Default depends on the ``figure_style`` configuration.
     line_width : int
         Line width of the :class:`~graphinglib.data_plotting_1d.Curve`.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str
         Line style of the :class:`~graphinglib.data_plotting_1d.Curve`.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the :class:`~graphinglib.data_plotting_1d.Curve`.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
     Attributes
     ----------
@@ -403,9 +556,10 @@ class FitFromPolynomial(GeneralFit):
         curve_to_be_fit: Curve | Scatter,
         degree: int,
         label: Optional[str] = None,
-        color: str = "default",
-        line_width: int | Literal["default"] = "default",
-        line_style: int | Literal["default"] = "default",
+        color: str | Inherit = INHERIT,
+        line_width: int | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
     ) -> None:
         """
         Creates a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing curve object using a polynomial fit.
@@ -426,10 +580,23 @@ class FitFromPolynomial(GeneralFit):
             Default depends on the ``figure_style`` configuration.
         line_width : int
             Line width of the :class:`~graphinglib.data_plotting_1d.Curve`.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str
             Line style of the :class:`~graphinglib.data_plotting_1d.Curve`.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the :class:`~graphinglib.data_plotting_1d.Curve`.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Attributes
         ----------
@@ -460,6 +627,7 @@ class FitFromPolynomial(GeneralFit):
         else:
             self._label = "$f(x) = $" + str(self)
         self._line_style = line_style
+        self._alpha = alpha
         self._res_curves_to_be_plotted = False
         number_of_points = (
             len(self._curve_to_be_fit._x_data)
@@ -467,8 +635,8 @@ class FitFromPolynomial(GeneralFit):
             else 500
         )
         self._x_data = np.linspace(
-            self._curve_to_be_fit._x_data[0],
-            self._curve_to_be_fit._x_data[-1],
+            np.min(self._curve_to_be_fit._x_data),
+            np.max(self._curve_to_be_fit._x_data),
             number_of_points,
         )
         self._y_data = self._function(self._x_data)
@@ -480,12 +648,8 @@ class FitFromPolynomial(GeneralFit):
         return self._coeffs
 
     @property
-    def cov_matrix(self) -> np.ndarray:
-        return self._cov_matrix
-
-    @property
-    def standard_deviation(self) -> np.ndarray:
-        return self._standard_deviation
+    def parameters(self) -> np.ndarray:
+        return self._coeffs
 
     def __str__(self) -> str:
         """
@@ -501,6 +665,8 @@ class FitFromPolynomial(GeneralFit):
                 continue
             coeff_chunks.append(self._format_coeff(coeff))
             power_chunks.append(self._format_power(power))
+        if len(coeff_chunks) == 0:
+            return "$0$"
         coeff_chunks[0] = coeff_chunks[0].lstrip("+ ")
         return (
             "$"
@@ -561,10 +727,27 @@ class FitFromSine(GeneralFit):
         Default depends on the ``figure_style`` configuration.
     line_width : int
         Line width of the curve.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str
         Line style of the curve.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the curve.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+    max_iterations : int
+        Maximum number of iterations for the fit.
+        Default is 10000.
+
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
     Attributes
     ----------
@@ -589,9 +772,11 @@ class FitFromSine(GeneralFit):
         curve_to_be_fit: Curve | Scatter,
         label: Optional[str] = None,
         guesses: Optional[ArrayLike] = None,
-        color: str = "default",
-        line_width: str = "default",
-        line_style: str = "default",
+        color: str | Inherit = INHERIT,
+        line_width: float | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
+        max_iterations: int = 10000,
     ) -> None:
         """
         Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing
@@ -613,10 +798,27 @@ class FitFromSine(GeneralFit):
             Default depends on the ``figure_style`` configuration.
         line_width : int
             Line width of the curve.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str
             Line style of the curve.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the curve.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+        max_iterations : int
+            Maximum number of iterations for the fit.
+            Default is 10000.
+
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Attributes
         ----------
@@ -643,6 +845,7 @@ class FitFromSine(GeneralFit):
         """
         self._curve_to_be_fit = curve_to_be_fit
         self._guesses = guesses
+        self._max_iterations = max_iterations
         self._calculate_parameters()
         self._function = self._sine_func_with_params()
         self._color = color
@@ -652,6 +855,7 @@ class FitFromSine(GeneralFit):
             self._label = "$f(x) = $" + str(self)
         self._line_width = line_width
         self._line_style = line_style
+        self._alpha = alpha
         self._res_curves_to_be_plotted = False
         number_of_points = (
             len(self._curve_to_be_fit._x_data)
@@ -659,13 +863,17 @@ class FitFromSine(GeneralFit):
             else 500
         )
         self._x_data = np.linspace(
-            self._curve_to_be_fit._x_data[0],
-            self._curve_to_be_fit._x_data[-1],
+            np.min(self._curve_to_be_fit._x_data),
+            np.max(self._curve_to_be_fit._x_data),
             number_of_points,
         )
         self._y_data = self._function(self._x_data)
 
         self._setup_attributes()
+
+    @property
+    def max_iterations(self) -> int:
+        return self._max_iterations
 
     @property
     def amplitude(self) -> float:
@@ -691,23 +899,11 @@ class FitFromSine(GeneralFit):
     def vertical_shift(self) -> float:
         return self._vertical_shift
 
-    @property
-    def cov_matrix(self) -> np.ndarray:
-        return self._cov_matrix
-
-    @property
-    def standard_deviation(self) -> np.ndarray:
-        return self._standard_deviation
-
-    @property
-    def parameters(self) -> np.ndarray:
-        return self._parameters
-
     def __str__(self) -> str:
         """
         Creates a string representation of the sine function.
         """
-        part1 = f"{self._amplitude:.3f} \sin({self._frequency_rad:.3f}x"
+        part1 = rf"{self._amplitude:.3f} \sin({self._frequency_rad:.3f}x"
         part2 = (
             f" + {self._phase_rad:.3f})"
             if self._phase_rad >= 0
@@ -724,11 +920,12 @@ class FitFromSine(GeneralFit):
         """
         Calculates the parameters of the fit.
         """
-        self._parameters, self._cov_matrix = curve_fit(
+        self._parameters, self._cov_matrix = _run_curve_fit(
             self._sine_func_template,
             self._curve_to_be_fit._x_data,
             self._curve_to_be_fit._y_data,
             p0=self._guesses,
+            maxfev=self._max_iterations,
         )
         self._amplitude, self._frequency_rad, self._phase_rad, self._vertical_shift = (
             self._parameters
@@ -759,9 +956,8 @@ class FitFromSine(GeneralFit):
         Callable
             Sine function with the parameters of the fit.
         """
-        return (
-            lambda x: self._amplitude
-            * np.sin(self._frequency_rad * x + self._phase_rad)
+        return lambda x: (
+            self._amplitude * np.sin(self._frequency_rad * x + self._phase_rad)
             + self._vertical_shift
         )
 
@@ -784,10 +980,27 @@ class FitFromExponential(GeneralFit):
         Default depends on the ``figure_style`` configuration.
     line_width : int
         Line width of the curve.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str
         Line style of the curve.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the curve.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+    max_iterations : int
+        Maximum number of iterations for the fit.
+        Default is 10000.
+
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
     Attributes
     ----------
@@ -806,13 +1019,15 @@ class FitFromExponential(GeneralFit):
         curve_to_be_fit: Curve | Scatter,
         label: Optional[str] = None,
         guesses: Optional[ArrayLike] = None,
-        color: str = "default",
-        line_width: int | Literal["default"] = "default",
-        line_style: str = "default",
+        color: str | Inherit = INHERIT,
+        line_width: int | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
+        max_iterations: int = 10000,
     ) -> None:
         """
         Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`)
-        of the form :math:`f(x) = a \exp(bx + c)` from an existing :class:`~graphinglib.data_plotting_1d.Curve`
+        of the form :math:`f(x) = a \\exp(bx + c)` from an existing :class:`~graphinglib.data_plotting_1d.Curve`
         object using an exponential fit.
 
         Parameters
@@ -828,10 +1043,27 @@ class FitFromExponential(GeneralFit):
             Default depends on the ``figure_style`` configuration.
         line_width : int
             Line width of the curve.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str
             Line style of the curve.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the curve.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+        max_iterations : int
+            Maximum number of iterations for the fit.
+            Default is 10000.
+
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Attributes
         ----------
@@ -846,6 +1078,7 @@ class FitFromExponential(GeneralFit):
         """
         self._curve_to_be_fit = curve_to_be_fit
         self._guesses = guesses
+        self._max_iterations = max_iterations
         self._calculate_parameters()
         self._function = self._exp_func_with_params()
         self._color = color
@@ -855,6 +1088,7 @@ class FitFromExponential(GeneralFit):
             self._label = "$f(x) = $" + str(self)
         self._line_width = line_width
         self._line_style = line_style
+        self._alpha = alpha
         self._res_curves_to_be_plotted = False
         number_of_points = (
             len(self._curve_to_be_fit._x_data)
@@ -862,8 +1096,8 @@ class FitFromExponential(GeneralFit):
             else 500
         )
         self._x_data = np.linspace(
-            self._curve_to_be_fit._x_data[0],
-            self._curve_to_be_fit._x_data[-1],
+            np.min(self._curve_to_be_fit._x_data),
+            np.max(self._curve_to_be_fit._x_data),
             number_of_points,
         )
         self._y_data = self._function(self._x_data)
@@ -871,22 +1105,14 @@ class FitFromExponential(GeneralFit):
         self._setup_attributes()
 
     @property
-    def parameters(self) -> np.ndarray:
-        return self._parameters
-
-    @property
-    def cov_matrix(self) -> np.ndarray:
-        return self._cov_matrix
-
-    @property
-    def standard_deviation(self) -> np.ndarray:
-        return self._standard_deviation
+    def max_iterations(self) -> int:
+        return self._max_iterations
 
     def __str__(self) -> str:
         """
         Creates a string representation of the exponential function.
         """
-        part1 = f"{self._parameters[0]:.3f} \exp({self._parameters[1]:.3f}x"
+        part1 = rf"{self._parameters[0]:.3f} \exp({self._parameters[1]:.3f}x"
         part2 = (
             f" + {self._parameters[2]:.3f})"
             if self._parameters[2] >= 0
@@ -898,11 +1124,12 @@ class FitFromExponential(GeneralFit):
         """
         Calculates the parameters of the fit.
         """
-        self._parameters, self._cov_matrix = curve_fit(
+        self._parameters, self._cov_matrix = _run_curve_fit(
             self._exp_func_template,
             self._curve_to_be_fit._x_data,
             self._curve_to_be_fit._y_data,
             p0=self._guesses,
+            maxfev=self._max_iterations,
         )
         self._standard_deviation = np.sqrt(np.diag(self._cov_matrix))
 
@@ -924,8 +1151,8 @@ class FitFromExponential(GeneralFit):
         function : Callable
             Exponential function with the parameters of the fit.
         """
-        return lambda x: self._parameters[0] * np.exp(
-            self._parameters[1] * x + self._parameters[2]
+        return lambda x: (
+            self._parameters[0] * np.exp(self._parameters[1] * x + self._parameters[2])
         )
 
 
@@ -934,7 +1161,7 @@ class FitFromGaussian(GeneralFit):
     Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing
     :class:`~graphinglib.data_plotting_1d.Curve` object using a gaussian fit.
 
-    Fits a gaussian function of the form :math:`f(x) = A e^{-\\frac{(x - \mu)^2}{2 \sigma^2}}` to the given curve.
+    Fits a gaussian function of the form :math:`f(x) = A e^{-\\frac{(x - \\mu)^2}{2 \\sigma^2}}` to the given curve.
     All standard :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
 
     Parameters
@@ -950,10 +1177,27 @@ class FitFromGaussian(GeneralFit):
         Default depends on the ``figure_style`` configuration.
     line_width : int
         Line width of the curve.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str
         Line style of the curve.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the curve.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+    max_iterations : int
+        Maximum number of iterations for the fit.
+        Default is 10000.
+
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
     Attributes
     ----------
@@ -981,15 +1225,17 @@ class FitFromGaussian(GeneralFit):
         curve_to_be_fit: Curve | Scatter,
         label: Optional[str] = None,
         guesses: Optional[ArrayLike] = None,
-        color: str = "default",
-        line_width: int | Literal["default"] = "default",
-        line_style: str = "default",
+        color: str | Inherit = INHERIT,
+        line_width: int | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
+        max_iterations: int = 10000,
     ) -> None:
         """
         Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing
         :class:`~graphinglib.data_plotting_1d.Curve` object using a gaussian fit.
 
-        Fits a gaussian function of the form :math:`f(x) = A e^{-\\frac{(x - \mu)^2}{2 \sigma^2}}` to the given curve.
+        Fits a gaussian function of the form :math:`f(x) = A e^{-\\frac{(x - \\mu)^2}{2 \\sigma^2}}` to the given curve.
         All standard :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
 
         Parameters
@@ -1005,10 +1251,27 @@ class FitFromGaussian(GeneralFit):
             Default depends on the ``figure_style`` configuration.
         line_width : int
             Line width of the curve.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str
             Line style of the curve.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the curve.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+        max_iterations : int
+            Maximum number of iterations for the fit.
+            Default is 10000.
+
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Attributes
         ----------
@@ -1031,6 +1294,7 @@ class FitFromGaussian(GeneralFit):
         """
         self._curve_to_be_fit = curve_to_be_fit
         self._guesses = guesses
+        self._max_iterations = max_iterations
         self._calculate_parameters()
         self._function = self._gaussian_func_with_params()
         self._color = color
@@ -1040,6 +1304,7 @@ class FitFromGaussian(GeneralFit):
             self._label = str(self)
         self._line_width = line_width
         self._line_style = line_style
+        self._alpha = alpha
         self._res_curves_to_be_plotted = False
         number_of_points = (
             len(self._curve_to_be_fit._x_data)
@@ -1047,13 +1312,17 @@ class FitFromGaussian(GeneralFit):
             else 500
         )
         self._x_data = np.linspace(
-            self._curve_to_be_fit._x_data[0],
-            self._curve_to_be_fit._x_data[-1],
+            np.min(self._curve_to_be_fit._x_data),
+            np.max(self._curve_to_be_fit._x_data),
             number_of_points,
         )
         self._y_data = self._function(self._x_data)
 
         self._setup_attributes()
+
+    @property
+    def max_iterations(self) -> int:
+        return self._max_iterations
 
     @property
     def amplitude(self) -> float:
@@ -1065,35 +1334,36 @@ class FitFromGaussian(GeneralFit):
 
     @property
     def standard_deviation(self) -> float:
-        return self._standard_deviation
-
-    @property
-    def cov_matrix(self) -> np.ndarray:
-        return self._cov_matrix
+        # Unlike the other fit classes, this is the fitted sigma of the gaussian itself,
+        # not the standard deviation of the fit parameters (see standard_deviation_of_fit_params).
+        return float(cast(Any, self._standard_deviation))
 
     @property
     def standard_deviation_of_fit_params(self) -> np.ndarray:
         return self._standard_deviation_of_fit_params
 
-    @property
-    def parameters(self) -> np.ndarray:
-        return self._parameters
-
     def __str__(self) -> str:
         """
         Creates a string representation of the gaussian function.
         """
-        return f"$\mu = {self._mean:.3f}, \sigma = {self._standard_deviation:.3f}, A = {self._amplitude:.3f}$"
+        return rf"$\mu = {self._mean:.3f}, \sigma = {self._standard_deviation:.3f}, A = {self._amplitude:.3f}$"
 
     def _calculate_parameters(self) -> None:
         """
         Calculates the parameters of the fit.
         """
-        self._parameters, self._cov_matrix = curve_fit(
+        guesses = self._guesses
+        if guesses is not None:
+            # The standard deviation guess must be positive to satisfy the fit's bounds,
+            # regardless of the sign the caller happened to guess.
+            guesses = _repair_positive_guess(guesses, index=2, number_of_parameters=3)
+        self._parameters, self._cov_matrix = _run_curve_fit(
             self._gaussian_func_template,
             self._curve_to_be_fit._x_data,
             self._curve_to_be_fit._y_data,
-            p0=self._guesses,
+            p0=guesses,
+            maxfev=self._max_iterations,
+            bounds=([-np.inf, -np.inf, 1e-10], [np.inf, np.inf, np.inf]),
         )
         self._amplitude = self._parameters[0]
         self._mean = self._parameters[1]
@@ -1120,8 +1390,9 @@ class FitFromGaussian(GeneralFit):
         function : Callable
             Gaussian function with the parameters of the fit.
         """
-        return lambda x: self._amplitude * np.exp(
-            -(((x - self._mean) / self._standard_deviation) ** 2) / 2
+        return lambda x: (
+            self._amplitude
+            * np.exp(-(((x - self._mean) / self._standard_deviation) ** 2) / 2)
         )
 
 
@@ -1130,7 +1401,7 @@ class FitFromSquareRoot(GeneralFit):
     Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing
     :class:`~graphinglib.data_plotting_1d.Curve` object using a square root fit.
 
-    Fits a square root function of the form :math:`f(x) = a \sqrt{x + b} + c` to the given curve. All standard
+    Fits a square root function of the form :math:`f(x) = a \\sqrt{x + b} + c` to the given curve. All standard
     :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
 
     Parameters
@@ -1146,10 +1417,27 @@ class FitFromSquareRoot(GeneralFit):
         Default depends on the ``figure_style`` configuration.
     line_width : int
         Line width of the curve.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str
         Line style of the curve.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the curve.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+    max_iterations : int
+        Maximum number of iterations for the fit.
+        Default is 10000.
+
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
     Attributes
     ----------
@@ -1168,15 +1456,17 @@ class FitFromSquareRoot(GeneralFit):
         curve_to_be_fit: Curve | Scatter,
         label: Optional[str] = None,
         guesses: Optional[ArrayLike] = None,
-        color: str = "default",
-        line_width: int | Literal["default"] = "default",
-        line_style: str = "default",
+        color: str | Inherit = INHERIT,
+        line_width: int | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
+        max_iterations: int = 10000,
     ) -> None:
         """
         Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing
         :class:`~graphinglib.data_plotting_1d.Curve` object using a square root fit.
 
-        Fits a square root function of the form :math:`f(x) = a \sqrt{x + b} + c` to the given curve. All standard
+        Fits a square root function of the form :math:`f(x) = a \\sqrt{x + b} + c` to the given curve. All standard
         :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
 
         Parameters
@@ -1192,10 +1482,27 @@ class FitFromSquareRoot(GeneralFit):
             Default depends on the ``figure_style`` configuration.
         line_width : int
             Line width of the curve.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str
             Line style of the curve.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the curve.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+        max_iterations : int
+            Maximum number of iterations for the fit.
+            Default is 10000.
+
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Attributes
         ----------
@@ -1210,6 +1517,7 @@ class FitFromSquareRoot(GeneralFit):
         """
         self._curve_to_be_fit = curve_to_be_fit
         self._guesses = guesses
+        self._max_iterations = max_iterations
         self._calculate_parameters()
         self._function = self._square_root_func_with_params()
         self._color = color
@@ -1219,6 +1527,7 @@ class FitFromSquareRoot(GeneralFit):
             self._label = str(self)
         self._line_width = line_width
         self._line_style = line_style
+        self._alpha = alpha
         self._res_curves_to_be_plotted = False
         number_of_points = (
             len(self._curve_to_be_fit._x_data)
@@ -1226,8 +1535,8 @@ class FitFromSquareRoot(GeneralFit):
             else 500
         )
         self._x_data = np.linspace(
-            self._curve_to_be_fit._x_data[0],
-            self._curve_to_be_fit._x_data[-1],
+            np.min(self._curve_to_be_fit._x_data),
+            np.max(self._curve_to_be_fit._x_data),
             number_of_points,
         )
         self._y_data = self._function(self._x_data)
@@ -1235,32 +1544,25 @@ class FitFromSquareRoot(GeneralFit):
         self._setup_attributes()
 
     @property
-    def parameters(self) -> np.ndarray:
-        return self._parameters
-
-    @property
-    def cov_matrix(self) -> np.ndarray:
-        return self.cov_matrix
-
-    @property
-    def standard_deviation(self) -> np.ndarray:
-        return self.standard_deviation
+    def max_iterations(self) -> int:
+        return self._max_iterations
 
     def __str__(self) -> str:
         """
         Creates a string representation of the square root function.
         """
-        return f"${self._parameters[0]:.3f} \sqrt{{x {'+' if self._parameters[1] > 0 else '-'} {abs(self._parameters[1]):.3f}}} {'+' if self._parameters[2] > 0 else '-'} {abs(self._parameters[2]):.3f}$"
+        return rf"${self._parameters[0]:.3f} \sqrt{{x {'+' if self._parameters[1] > 0 else '-'} {abs(self._parameters[1]):.3f}}} {'+' if self._parameters[2] > 0 else '-'} {abs(self._parameters[2]):.3f}$"
 
     def _calculate_parameters(self) -> None:
         """
         Calculates the parameters of the fit.
         """
-        self._parameters, self._cov_matrix = curve_fit(
+        self._parameters, self._cov_matrix = _run_curve_fit(
             self._square_root_func_template,
             self._curve_to_be_fit._x_data,
             self._curve_to_be_fit._y_data,
             p0=self._guesses,
+            maxfev=self._max_iterations,
         )
         self._standard_deviation = np.sqrt(np.diag(self._cov_matrix))
 
@@ -1284,9 +1586,8 @@ class FitFromSquareRoot(GeneralFit):
         function : Callable
             Square root function with the parameters of the fit.
         """
-        return (
-            lambda x: self._parameters[0] * np.sqrt(x + self._parameters[1])
-            + self._parameters[2]
+        return lambda x: (
+            self._parameters[0] * np.sqrt(x + self._parameters[1]) + self._parameters[2]
         )
 
 
@@ -1295,7 +1596,7 @@ class FitFromLog(GeneralFit):
     Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing
     :class:`~graphinglib.data_plotting_1d.Curve` object using a logarithmic fit.
 
-    Fits a logarithmic function of the form :math:`f(x) = a \log_{base}(x + b) + c` to the given curve. All standard
+    Fits a logarithmic function of the form :math:`f(x) = a \\log_{base}(x + b) + c` to the given curve. All standard
     :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
 
     Parameters
@@ -1314,10 +1615,27 @@ class FitFromLog(GeneralFit):
         Default depends on the ``figure_style`` configuration.
     line_width : int
         Line width of the curve.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str
         Line style of the curve.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the curve.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+    max_iterations : int
+        Maximum number of iterations for the fit.
+        Default is 10000.
+
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
     Attributes
     ----------
@@ -1337,15 +1655,17 @@ class FitFromLog(GeneralFit):
         label: Optional[str] = None,
         log_base: float = np.e,
         guesses: Optional[ArrayLike] = None,
-        color: str = "default",
-        line_width: int | Literal["default"] = "default",
-        line_style: str = "default",
+        color: str | Inherit = INHERIT,
+        line_width: int | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
+        max_iterations: int = 10000,
     ) -> None:
         """
         Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing
         :class:`~graphinglib.data_plotting_1d.Curve` object using a logarithmic fit.
 
-        Fits a logarithmic function of the form :math:`f(x) = a \log_{base}(x + b) + c` to the given curve. All standard
+        Fits a logarithmic function of the form :math:`f(x) = a \\log_{base}(x + b) + c` to the given curve. All standard
         :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
 
         Parameters
@@ -1364,10 +1684,27 @@ class FitFromLog(GeneralFit):
             Default depends on the ``figure_style`` configuration.
         line_width : int
             Line width of the curve.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str
             Line style of the curve.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the curve.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+        max_iterations : int
+            Maximum number of iterations for the fit.
+            Default is 10000.
+
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Attributes
         ----------
@@ -1383,6 +1720,7 @@ class FitFromLog(GeneralFit):
         self._curve_to_be_fit = curve_to_be_fit
         self._log_base = log_base
         self._guesses = guesses
+        self._max_iterations = max_iterations
         self._calculate_parameters()
         self._function = self._log_func_with_params()
         self._color = color
@@ -1392,6 +1730,7 @@ class FitFromLog(GeneralFit):
             self._label = str(self)
         self._line_width = line_width
         self._line_style = line_style
+        self._alpha = alpha
         self._res_curves_to_be_plotted = False
         number_of_points = (
             len(self._curve_to_be_fit._x_data)
@@ -1399,8 +1738,8 @@ class FitFromLog(GeneralFit):
             else 500
         )
         self._x_data = np.linspace(
-            self._curve_to_be_fit._x_data[0],
-            self._curve_to_be_fit._x_data[-1],
+            np.min(self._curve_to_be_fit._x_data),
+            np.max(self._curve_to_be_fit._x_data),
             number_of_points,
         )
         self._y_data = self._function(self._x_data)
@@ -1408,16 +1747,8 @@ class FitFromLog(GeneralFit):
         self._setup_attributes()
 
     @property
-    def parameters(self) -> np.ndarray:
-        return self._parameters
-
-    @property
-    def cov_matrix(self) -> np.ndarray:
-        return self._cov_matrix
-
-    @property
-    def standard_deviation(self) -> np.ndarray:
-        return self._standard_deviation
+    def max_iterations(self) -> int:
+        return self._max_iterations
 
     def __str__(self) -> str:
         """
@@ -1429,11 +1760,12 @@ class FitFromLog(GeneralFit):
         """
         Calculates the parameters of the fit.
         """
-        self._parameters, self._cov_matrix = curve_fit(
+        self._parameters, self._cov_matrix = _run_curve_fit(
             self._log_func_template(),
             self._curve_to_be_fit._x_data,
             self._curve_to_be_fit._y_data,
             p0=self._guesses,
+            maxfev=self._max_iterations,
         )
         self._standard_deviation = np.sqrt(np.diag(self._cov_matrix))
 
@@ -1456,8 +1788,8 @@ class FitFromLog(GeneralFit):
         function : Callable
             Logarithmic function with the parameters of the fit.
         """
-        return (
-            lambda x: self._parameters[0]
+        return lambda x: (
+            self._parameters[0]
             * (np.log(x + self._parameters[1]) / np.log(self._log_base))
             + self._parameters[2]
         )
@@ -1474,7 +1806,9 @@ class FitFromFunction(GeneralFit):
     Parameters
     ----------
     function : Callable
-        Function to be passed to the curve_fit function.
+        Function to fit. The first argument must be the x values, followed by
+        fit parameters (``f(x, a, b, c, ...)``), and it must return scalar or
+        array-like y values.
     curve_to_be_fit : :class:`~graphinglib.data_plotting_1d.Curve` or :class:`~graphinglib.data_plotting_1d.Scatter`
         The object to be fit.
     label : str, optional
@@ -1486,10 +1820,27 @@ class FitFromFunction(GeneralFit):
         Default depends on the ``figure_style`` configuration.
     line_width : int
         Line width of the curve.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str
         Line style of the curve.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the curve.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+    max_iterations : int
+        Maximum number of iterations for the fit.
+        Default is 10000.
+
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
     Attributes
     ----------
@@ -1500,18 +1851,20 @@ class FitFromFunction(GeneralFit):
     standard_deviation : np.ndarray
         Standard deviation of the parameters of the fit.
     function : Callable
-        Function with the parameters of the fit.
+        Fitted function with the parameters bound. Accepts scalar or array x values.
     """
 
     def __init__(
         self,
-        function: Callable,
+        function: Callable[..., float | np.ndarray],
         curve_to_be_fit: Curve | Scatter,
         label: Optional[str] = None,
         guesses: Optional[ArrayLike] = None,
-        color: str = "default",
-        line_width: int | Literal["default"] = "default",
-        line_style: str = "default",
+        color: str | Inherit = INHERIT,
+        line_width: int | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
+        max_iterations: int = 10000,
     ):
         """
         Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from a
@@ -1523,7 +1876,9 @@ class FitFromFunction(GeneralFit):
         Parameters
         ----------
         function : Callable
-            Function to be passed to the curve_fit function.
+            Function to fit. The first argument must be the x values, followed by
+            fit parameters (``f(x, a, b, c, ...)``), and it must return scalar or
+            array-like y values.
         curve_to_be_fit : :class:`~graphinglib.data_plotting_1d.Curve` or :class:`~graphinglib.data_plotting_1d.Scatter`
             The object to be fit.
         label : str, optional
@@ -1535,10 +1890,27 @@ class FitFromFunction(GeneralFit):
             Default depends on the ``figure_style`` configuration.
         line_width : int
             Line width of the curve.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str
             Line style of the curve.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the curve.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+        max_iterations : int
+            Maximum number of iterations for the fit.
+            Default is 10000.
+
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Attributes
         ----------
@@ -1549,7 +1921,7 @@ class FitFromFunction(GeneralFit):
         standard_deviation : np.ndarray
             Standard deviation of the parameters of the fit.
         function : Callable
-            Function with the parameters of the fit.
+            Fitted function with the parameters bound. Accepts scalar or array x values.
         """
         self._function_template = function
         self._curve_to_be_fit = curve_to_be_fit
@@ -1557,10 +1929,15 @@ class FitFromFunction(GeneralFit):
         self._color = color
         self._line_width = line_width
         self._line_style = line_style
+        self._alpha = alpha
+        self._max_iterations = max_iterations
 
         self._calculate_parameters()
         self._function = self._get_function_with_params()
-        self._label = label
+        if label:
+            self._label = label + " : " + str(self)
+        else:
+            self._label = str(self)
         self._res_curves_to_be_plotted = False
         number_of_points = (
             len(self._curve_to_be_fit._x_data)
@@ -1568,8 +1945,8 @@ class FitFromFunction(GeneralFit):
             else 500
         )
         self._x_data = np.linspace(
-            self._curve_to_be_fit._x_data[0],
-            self._curve_to_be_fit._x_data[-1],
+            np.min(self._curve_to_be_fit._x_data),
+            np.max(self._curve_to_be_fit._x_data),
             number_of_points,
         )
         self._y_data = self._function(self._x_data)
@@ -1577,22 +1954,25 @@ class FitFromFunction(GeneralFit):
         self._setup_attributes()
 
     @property
-    def parameters(self) -> np.ndarray:
-        return self._parameters
+    def max_iterations(self) -> int:
+        return self._max_iterations
 
-    @property
-    def cov_matrix(self) -> np.ndarray:
-        return self._cov_matrix
-
-    @property
-    def standard_deviation(self) -> np.ndarray:
-        return self._standard_deviation
+    def __str__(self) -> str:
+        """
+        Creates a string representation of the fitted function.
+        """
+        function_name = getattr(
+            self._function_template,
+            "__name__",
+            type(self._function_template).__name__,
+        )
+        return f"Fit from function: {function_name}"
 
     def _calculate_parameters(self) -> None:
         """
         Calculates the parameters of the fit.
         """
-        self._parameters, self._cov_matrix = curve_fit(
+        self._parameters, self._cov_matrix = _run_curve_fit(
             self._function_template,
             self._curve_to_be_fit._x_data,
             self._curve_to_be_fit._y_data,
@@ -1600,29 +1980,32 @@ class FitFromFunction(GeneralFit):
         )
         self._standard_deviation = np.sqrt(np.diag(self._cov_matrix))
 
-    def _get_function_with_params(self) -> Callable:
+    def _get_function_with_params(
+        self,
+    ) -> Callable[[float | np.ndarray], float | np.ndarray]:
         """
         Creates a function with the parameters of the fit.
 
         Returns
         -------
         function : Callable
-            Function with the parameters of the fit.
+            Fitted function with the parameters bound. Accepts scalar or array x values.
         """
-        argument_names = self._function_template.__code__.co_varnames[
-            : self._function_template.__code__.co_argcount
-        ][1:]
+        argument_names = list(signature(self._function_template).parameters)[1:]
         args_dict = {
             argument_names[i]: self._parameters[i] for i in range(len(argument_names))
         }
-        return partial(self._function_template, **args_dict)
+        return cast(
+            Callable[[float | np.ndarray], float | np.ndarray],
+            partial(self._function_template, **args_dict),
+        )
 
 
 class FitFromFOTF(GeneralFit):
     """
     Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing :class:`~graphinglib.data_plotting_1d.Curve` object using a first order transfer function (FOTF) fit.
 
-    Fits a first order transfer function of the form :math:`f(x) = K\left(1-e^{-\\frac{t}{\\tau}}\\right)` to the given curve. All standard :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
+    Fits a first order transfer function of the form :math:`f(x) = K\\left(1-e^{-\\frac{t}{\\tau}}\\right)` to the given curve. All standard :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
 
     Parameters
     ----------
@@ -1637,10 +2020,27 @@ class FitFromFOTF(GeneralFit):
         Default depends on the ``figure_style`` configuration.
     line_width : int
         Line width of the curve.
+        Typical range is ``0.5`` to ``4``.
         Default depends on the ``figure_style`` configuration.
     line_style : str
         Line style of the curve.
+        Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+        ``"dotted"``.
         Default depends on the ``figure_style`` configuration.
+    alpha : float
+        Opacity of the curve.
+        Range is ``0`` (transparent) to ``1`` (opaque).
+        Default depends on the ``figure_style`` configuration.
+    max_iterations : int
+        Maximum number of iterations for the fit.
+        Default is 10000.
+
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
     Attributes
     ----------
@@ -1661,14 +2061,16 @@ class FitFromFOTF(GeneralFit):
         curve_to_be_fit: Curve | Scatter,
         label: Optional[str] = None,
         guesses: Optional[ArrayLike] = None,
-        color: str = "default",
-        line_width: int | Literal["default"] = "default",
-        line_style: str = "default",
+        color: str | Inherit = INHERIT,
+        line_width: int | Inherit = INHERIT,
+        line_style: str | Inherit = INHERIT,
+        alpha: float | Inherit = INHERIT,
+        max_iterations: int = 10000,
     ) -> None:
         """
         Create a curve fit (continuous :class:`~graphinglib.data_plotting_1d.Curve`) from an existing :class:`~graphinglib.data_plotting_1d.Curve` object using a first order transfer function (FOTF) fit.
 
-        Fits a first order transfer function of the form :math:`f(x) = K \left(1 - e^{-\\frac{t}{\\tau}}\\right)` to the given curve. All standard :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
+        Fits a first order transfer function of the form :math:`f(x) = K \\left(1 - e^{-\\frac{t}{\\tau}}\\right)` to the given curve. All standard :class:`~graphinglib.data_plotting_1d.Curve` attributes and methods are available.
 
         Parameters
         ----------
@@ -1683,10 +2085,27 @@ class FitFromFOTF(GeneralFit):
             Default depends on the ``figure_style`` configuration.
         line_width : int
             Line width of the curve.
+            Typical range is ``0.5`` to ``4``.
             Default depends on the ``figure_style`` configuration.
         line_style : str
             Line style of the curve.
+            Values include ``"-"``, ``"--"``, ``"-."``, ``":"``, ``"solid"``, ``"dashed"``, ``"dashdot"``, and
+            ``"dotted"``.
             Default depends on the ``figure_style`` configuration.
+        alpha : float
+            Opacity of the curve.
+            Range is ``0`` (transparent) to ``1`` (opaque).
+            Default depends on the ``figure_style`` configuration.
+        max_iterations : int
+            Maximum number of iterations for the fit.
+            Default is 10000.
+
+
+        Notes
+        -----
+        Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+        (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+        values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
 
         Attributes
         ----------
@@ -1703,6 +2122,7 @@ class FitFromFOTF(GeneralFit):
         """
         self._curve_to_be_fit = curve_to_be_fit
         self._guesses = guesses
+        self._max_iterations = max_iterations
         self._calculate_parameters()
         self._function = self._fotf_func_with_params()
         self._color = color
@@ -1712,6 +2132,7 @@ class FitFromFOTF(GeneralFit):
             self._label = str(self)
         self._line_width = line_width
         self._line_style = line_style
+        self._alpha = alpha
         self._res_curves_to_be_plotted = False
         number_of_points = (
             len(self._curve_to_be_fit._x_data)
@@ -1719,13 +2140,17 @@ class FitFromFOTF(GeneralFit):
             else 500
         )
         self._x_data = np.linspace(
-            self._curve_to_be_fit._x_data[0],
-            self._curve_to_be_fit._x_data[-1],
+            np.min(self._curve_to_be_fit._x_data),
+            np.max(self._curve_to_be_fit._x_data),
             number_of_points,
         )
         self._y_data = self._function(self._x_data)
 
         self._setup_attributes()
+
+    @property
+    def max_iterations(self) -> int:
+        return self._max_iterations
 
     @property
     def gain(self) -> float:
@@ -1735,33 +2160,28 @@ class FitFromFOTF(GeneralFit):
     def time_constant(self) -> float:
         return self._time_constant
 
-    @property
-    def cov_matrix(self) -> np.ndarray:
-        return self._cov_matrix
-
-    @property
-    def standard_deviation(self) -> np.ndarray:
-        return self._standard_deviation
-
-    @property
-    def parameters(self) -> np.ndarray:
-        return self._parameters
-
     def __str__(self) -> str:
         """
         Creates a string representation of the first order transfer function.
         """
-        return f"$K = {self._gain:.3f}, \\tau = {self._time_constant:.3f}$"
+        return rf"$K = {self._gain:.3f}, \tau = {self._time_constant:.3f}$"
 
     def _calculate_parameters(self) -> None:
         """
         Calculates the parameters of the fit.
         """
-        self._parameters, self._cov_matrix = curve_fit(
+        guesses = self._guesses
+        if guesses is not None:
+            # The time constant guess must be positive to satisfy the fit's bounds,
+            # regardless of the sign the caller happened to guess.
+            guesses = _repair_positive_guess(guesses, index=1, number_of_parameters=2)
+        self._parameters, self._cov_matrix = _run_curve_fit(
             self._fotf_func_template,
             self._curve_to_be_fit._x_data,
             self._curve_to_be_fit._y_data,
-            p0=self._guesses,
+            p0=guesses,
+            maxfev=self._max_iterations,
+            bounds=([-np.inf, 1e-10], [np.inf, np.inf]),
         )
         self._gain = self._parameters[0]
         self._time_constant = self._parameters[1]

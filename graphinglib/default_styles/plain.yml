@@ -1,7 +1,8 @@
 Curve:
-  _color: 
+  _color:
   _line_width: 2
   _line_style: "-"
+  _alpha: 1.0
   _cap_width: 3
   _errorbars_color: "same as curve"
   _errorbars_line_width: "same as curve"
@@ -20,6 +21,7 @@ Scatter:
   _marker_size: 50
   _marker_edge_width: 1.5
   _marker_style: "o"
+  _alpha: 1.0
   _cap_width: 3
   _errorbars_color: "same as scatter"
   _errorbars_line_width: 1
@@ -41,11 +43,13 @@ Histogram:
   _pdf_std_color: "k"
 
 Hlines:
+  _alpha: 1.0
   _colors: "k"
   _line_styles: "-"
   _line_widths: 2
 
 Vlines:
+  _alpha: 1.0
   _colors: "k"
   _line_styles: "solid"
   _line_widths: 2
@@ -62,17 +66,19 @@ SmartFigure:
   _size: [6.4, 4.8]
 
 Point:
-  _color: "k"
+  _face_color: "k"
   _edge_color: null
   _marker_size: 30
   _marker_style: "o"
   _edge_width: 1.5
+  _alpha: 1.0
   _text_color: "same as point"
 
 FitFromPolynomial:
   _color: "k"
   _line_width: 2
   _line_style: "-"
+  _alpha: 1.0
   _res_color: "k"
   _res_line_width: 1
   _res_line_style: "--"
@@ -81,6 +87,7 @@ FitFromExponential:
   _color: "k"
   _line_width: 2
   _line_style: "-"
+  _alpha: 1.0
   _res_color: "k"
   _res_line_width: 1
   _res_line_style: "--"
@@ -89,6 +96,7 @@ FitFromGaussian:
   _color: "k"
   _line_width: 2
   _line_style: "-"
+  _alpha: 1.0
   _res_color: "k"
   _res_line_width: 1
   _res_line_style: "--"
@@ -97,6 +105,7 @@ FitFromSine:
   _color: "k"
   _line_width: 2
   _line_style: "-"
+  _alpha: 1.0
   _res_color: "k"
   _res_line_width: 1
   _res_line_style: "--"
@@ -105,6 +114,7 @@ FitFromSquareRoot:
   _color: "k"
   _line_width: 2
   _line_style: "-"
+  _alpha: 1.0
   _res_color: "k"
   _res_line_width: 1
   _res_line_style: "--"
@@ -116,6 +126,7 @@ FitFromLog:
   _color: "k"
   _line_width: 2
   _line_style: "-"
+  _alpha: 1.0
 
 FitFromFunction:
   _res_color: "k"
@@ -124,6 +135,7 @@ FitFromFunction:
   _color: "k"
   _line_width: 2
   _line_style: "-"
+  _alpha: 1.0
 
 FitFromFOTF:
   _res_color: "k"
@@ -132,6 +144,7 @@ FitFromFOTF:
   _color: "k"
   _line_width: 2
   _line_style: "-"
+  _alpha: 1.0
 
 Heatmap:
   _aspect_ratio: "equal"
@@ -140,11 +153,12 @@ Heatmap:
   _show_color_bar: True
 
 Contour:
-  _number_of_levels: 10
+  _levels: 10
   _color_map: "coolwarm"
   _show_color_bar: True
   _filled: True
   _alpha: 1.0
+  _line_widths: 1
 
 VectorField:
   _arrow_width: 1
@@ -152,6 +166,7 @@ VectorField:
   _color: "k"
 
 Text:
+  _alpha: 1.0
   _color: "k"
   _h_align: "center"
   _v_align: "baseline"
@@ -169,11 +184,19 @@ Table:
 
 Stream:
   _line_width: 1
-  _color: 
-  _color_map: 
+  _color:
+  _color_map:
   _arrow_size: 1
 
 Circle:
+  _fill: True
+  _fill_alpha: 0.5
+  _fill_color:
+  _edge_color: "black"
+  _line_width: 2
+  _line_style: "-"
+
+Ellipse:
   _fill: True
   _fill_alpha: 0.5
   _fill_color:
@@ -190,11 +213,14 @@ Rectangle:
   _line_style: "-"
 
 Arrow:
+  _alpha: 1.0
   _color: "black"
   _head_size: 1
   _width: 2
+  _style: "-|>"
 
 Line:
+  _alpha: 1.0
   _color: "black"
   _width: 2
   _cap_width: 1
@@ -217,6 +243,7 @@ rc_params:
   axes.titlesize: 12
   axes.titleweight: "normal"
   axes.prop_cycle: cycler('color', ['#3e82a0', '#edb73b', '#b9503b', '#8aba4e', '#695178', '#ed893b', '#34a893', '#616161'])
+  axes.grid: False
   figure.titlesize: 12
   figure.titleweight: "normal"
   xtick.color: "black"
@@ -237,5 +264,3 @@ rc_params:
   grid.linewidth: 0.5
   grid.color: "grey"
   grid.alpha: 0.5
-
-

@@ -235,6 +235,16 @@ GraphingLib goes beyond basic plotting. Perform curve fits, differentiation, int
 
 GraphingLib allows you to apply prepackaged or custom styles effortlessly. Our :doc:`GUI Style Editor <handbook/figure_style_file>` lets you create, modify, and save styles, which can then be applied with a simple keyword. You can even set your own style as the default for all your figures. With GraphingLib, you can customize your plots quickly while retaining full control over their appearance.
 
+Citing GraphingLib
+------------------
+
+If you want to cite GraphingLib in a publication, you can do so using this DOI for the latest release :
+
+.. image:: https://zenodo.org/badge/613172394.svg
+   :target: https://zenodo.org/badge/latestdoi/613172394
+
+.. note:: There is also a DOI for each version from the 1.6.0 release on `zenodo.org <https://zenodo.org/search?q=parent.id%3A19936792&f=allversions%3Atrue&l=list&p=1&s=10&sort=version>`_.
+
 .. toctree::
    :maxdepth: 3
    :hidden:

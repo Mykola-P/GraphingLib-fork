@@ -11,6 +11,8 @@ from matplotlib.typing import ColorType
 from numpy import array, full_like
 from typing import Any, Literal, Optional, Protocol, Sequence, runtime_checkable
 
+from .exceptions import InvalidParameterError, InvalidParameterTypeError
+
 
 class HandlerMultipleLines(HandlerLineCollection):
     """
@@ -30,24 +32,29 @@ class HandlerMultipleLines(HandlerLineCollection):
         fontsize: float,
         trans: Transform,
     ) -> list[Line2D]:
+        assert isinstance(orig_handle, LineCollection)
         numlines = len(orig_handle.get_segments())
         xdata, _ = self.get_xdata(legend, xdescent, ydescent, width, height, fontsize)
         lines = []
         ydata = full_like(xdata, height / (numlines + 1))
+        colors = orig_handle.get_colors()
+        # get_dashes exists at runtime but is absent from matplotlib's LineCollection stub.
+        all_dashes = orig_handle.get_dashes()  # ty: ignore[unresolved-attribute]
         for i in range(numlines):
             line = Line2D(xdata, ydata * (numlines - i) - ydescent)
             self.update_prop(line, orig_handle, legend)
             try:
-                color = orig_handle.get_colors()[i]
+                color = colors[i]
             except IndexError:
-                color = orig_handle.get_colors()[0]
+                color = colors[0]
             try:
-                dashes = orig_handle.get_dashes()[i]
+                dashes = all_dashes[i]
             except IndexError:
-                dashes = orig_handle.get_dashes()[0]
+                dashes = all_dashes[0]
             if dashes[1] is not None:
                 line.set_dashes(dashes[1])
-            line.set_color(color)
+            # get_colors() elements are valid Matplotlib colors; the stub types them too loosely.
+            line.set_color(color)  # ty: ignore[invalid-argument-type]
             line.set_transform(trans)
             line.set_linewidth(2)
             lines.append(line)
@@ -72,24 +79,29 @@ class HandlerMultipleVerticalLines(HandlerLineCollection):
         fontsize: float,
         trans: Transform,
     ) -> list[Line2D]:
+        assert isinstance(orig_handle, LineCollection)
         numlines = len(orig_handle.get_segments())
         lines = []
         xdata = array([width / (numlines + 1), width / (numlines + 1)])
         ydata = array([0, height])
+        colors = orig_handle.get_colors()
+        # get_dashes exists at runtime but is absent from matplotlib's LineCollection stub.
+        all_dashes = orig_handle.get_dashes()  # ty: ignore[unresolved-attribute]
         for i in range(numlines):
             line = Line2D(xdata * (numlines - i) - xdescent, ydata - ydescent)
             self.update_prop(line, orig_handle, legend)
             try:
-                color = orig_handle.get_colors()[i]
+                color = colors[i]
             except IndexError:
-                color = orig_handle.get_colors()[0]
+                color = colors[0]
             try:
-                dashes = orig_handle.get_dashes()[i]
+                dashes = all_dashes[i]
             except IndexError:
-                dashes = orig_handle.get_dashes()[0]
+                dashes = all_dashes[0]
             if dashes[1] is not None:
                 line.set_dashes(dashes[1])
-            line.set_color(color)
+            # get_colors() elements are valid Matplotlib colors; the stub types them too loosely.
+            line.set_color(color)  # ty: ignore[invalid-argument-type]
             line.set_transform(trans)
             line.set_linewidth(2)
             lines.append(line)
@@ -129,9 +141,11 @@ def histogram_legend_artist(
 class LegendElement(Protocol):
     """
     This class implements a legend element that can be used to create custom legend entries for the
-    :meth:`~graphinglib.smart_figure.SmartFigure.set_custom_legend` method. It must be subclassed to create specific
-    legend elements that implement the `handle` property, which returns a Matplotlib artist.
+    :meth:`~graphinglib.SmartFigure.set_custom_legend` method. It should not be used on its own and must be subclassed
+    to create specific legend elements that implement the `handle` property, which returns a Matplotlib artist. All
+    parameters are also available as properties.
     """
+
     @property
     def handle(self) -> Artist:
         """
@@ -145,7 +159,10 @@ class LegendElement(Protocol):
 
     @label.setter
     def label(self, value: str) -> None:
-        self._label = value
+        # Declaring _label/_alpha as protocol members would add them to this
+        # runtime_checkable protocol's isinstance check, changing its behavior for
+        # user-defined subclasses; the concrete subclasses declare them instead.
+        self._label = value  # ty: ignore[ambiguous-protocol-member]
 
     @property
     def alpha(self) -> float:
@@ -154,37 +171,53 @@ class LegendElement(Protocol):
     @alpha.setter
     def alpha(self, value: float) -> None:
         if not isinstance(value, (int, float)):
-            raise TypeError("Alpha value must be a number.")
+            raise InvalidParameterTypeError("Alpha value must be a number.")
         if not (0 <= value <= 1):
-            raise ValueError("Alpha value must be between 0 and 1.")
-        self._alpha = value
+            raise InvalidParameterError("Alpha value must be between 0 and 1.")
+        self._alpha = value  # ty: ignore[ambiguous-protocol-member]
 
-    def _color_setter(self, attr: str, value: ColorType) -> None:
+    def _color_setter(self, attr: str, value: Optional[ColorType]) -> None:
         if value is not None:
             if not is_color_like(value):
-                raise ValueError(f"'{value}' is not a valid color.")
+                raise InvalidParameterError(f"'{value}' is not a valid color.")
         setattr(self, f"_{attr}", value)
 
     def _number_setter(self, attr: str, value: float) -> None:
         if not isinstance(value, (int, float)):
-            raise TypeError(f"'{value}' is not a valid number.")
+            raise InvalidParameterTypeError(f"'{value}' is not a valid number.")
         if value < 0:
-            raise ValueError(f"'{value}' cannot be negative.")
+            raise InvalidParameterError(f"'{value}' cannot be negative.")
         setattr(self, f"_{attr}", value)
 
     def _line_style_setter(
         self,
         attr: str,
-        value: Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"] | tuple[float, Sequence]
+        value: Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]
+        | tuple[float, Sequence],
     ) -> None:
         if isinstance(value, str):
-            if value not in ["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]:
-                raise ValueError(f"'{value}' is not a valid line style.")
+            if value not in [
+                "-",
+                "--",
+                "-.",
+                ":",
+                "solid",
+                "dashed",
+                "dashdot",
+                "dotted",
+            ]:
+                raise InvalidParameterError(f"'{value}' is not a valid line style.")
         elif isinstance(value, tuple):
-            if len(value) != 2 or not all(isinstance(x, (int, float)) for x in [value[0], *value[1]]):
-                raise ValueError(f"'{value}' is not a valid line style tuple.")
+            if len(value) != 2 or not all(
+                isinstance(x, (int, float)) for x in [value[0], *value[1]]
+            ):
+                raise InvalidParameterError(
+                    f"'{value}' is not a valid line style tuple."
+                )
         else:
-            raise TypeError(f"'{value}' is not a valid line style type.")
+            raise InvalidParameterTypeError(
+                f"'{value}' is not a valid line style type."
+            )
         setattr(self, f"_{attr}", value)
 
 
@@ -192,8 +225,43 @@ class LegendLine(LegendElement):
     """
     This class implements a legend line wrapping the
     `Line2D <https://matplotlib.org/stable/api/_as_gen/matplotlib.lines.Line2D.html#matplotlib.lines.Line2D>`_ object
-    for creating custom legend entries with the :meth:`:~graphinglib.smart_figure.SmartFigure.set_custom_legend` method.
+    for creating custom legend entries with the :meth:`~graphinglib.SmartFigure.set_custom_legend` method. All
+    parameters are also available as properties.
+
+    Parameters
+    ----------
+    label : str
+        The label for the legend line.
+    color : ColorType
+        The color of the line.
+    gap_color : ColorType, optional
+        The color of the gaps in the line (for dashed lines).
+    line_width : float, optional
+        The width of the line in points.
+        Typical range is ``0.5`` to ``4``.
+        Defaults to ``2.0``.
+    line_style : {"-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"} or tuple of float and sequence, optional
+        The style of the line, which can be `any pattern supported by Matplotlib
+        <https://matplotlib.org/stable/api/_as_gen/matplotlib.patches.Patch.html#matplotlib.patches.Patch.set_linestyle>`_.
+        Defaults to ``"-"`` (solid line).
+    alpha : float, optional
+        The transparency level of the line, between ``0`` (fully transparent) and ``1`` (fully opaque).
+        Defaults to ``1.0``.
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
     """
+
+    _color: ColorType
+    _gap_color: Optional[ColorType]
+    _line_width: float
+    _line_style: (
+        Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]
+        | tuple[float, Sequence]
+    )
 
     def __init__(
         self,
@@ -201,8 +269,10 @@ class LegendLine(LegendElement):
         color: ColorType,
         gap_color: Optional[ColorType] = None,
         line_width: float = 2.0,
-        line_style: Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]
-                    | tuple[float, Sequence] = "-",
+        line_style: Literal[
+            "-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"
+        ]
+        | tuple[float, Sequence] = "-",
         alpha: float = 1.0,
     ) -> None:
         self.label = label
@@ -217,8 +287,16 @@ class LegendLine(LegendElement):
         """
         Returns the Matplotlib Line2D artist that represents this legend line.
         """
-        return Line2D([], [], label=self._label, color=self._color, gapcolor=self._gap_color,
-                      linewidth=self._line_width, linestyle=self._line_style, alpha=self._alpha)
+        return Line2D(
+            [],
+            [],
+            label=self._label,
+            color=self._color,
+            gapcolor=self._gap_color,
+            linewidth=self._line_width,
+            linestyle=self._line_style,
+            alpha=self._alpha,
+        )
 
     @property
     def color(self) -> ColorType:
@@ -229,11 +307,11 @@ class LegendLine(LegendElement):
         self._color_setter("color", value)
 
     @property
-    def gap_color(self) -> ColorType:
+    def gap_color(self) -> Optional[ColorType]:
         return self._gap_color
 
     @gap_color.setter
-    def gap_color(self, value: ColorType) -> None:
+    def gap_color(self, value: Optional[ColorType]) -> None:
         self._color_setter("gap_color", value)
 
     @property
@@ -245,23 +323,76 @@ class LegendLine(LegendElement):
         self._number_setter("line_width", value)
 
     @property
-    def line_style(self) -> Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"] \
-                            | tuple[float, Sequence]:
+    def line_style(
+        self,
+    ) -> (
+        Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]
+        | tuple[float, Sequence]
+    ):
         return self._line_style
 
     @line_style.setter
-    def line_style(self, value: Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"] \
-                                | tuple[float, Sequence]) -> None:
+    def line_style(
+        self,
+        value: Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]
+        | tuple[float, Sequence],
+    ) -> None:
         self._line_style_setter("line_style", value)
 
 
 class LegendMarker(LegendElement):
     """
-    This class implements a legend marker wrapping the
-    `Line2D <https://matplotlib.org/stable/api/_as_gen/matplotlib.lines.Line2D.html#matplotlib.lines.Line2D>`_ object
-    with a marker style set for creating custom legend entries with the
-    :meth:`:~graphinglib.smart_figure.SmartFigure.set_custom_legend` method.
+    This class implements a legend marker wrapping the `Line2D
+    <https://matplotlib.org/stable/api/_as_gen/matplotlib.lines.Line2D.html#matplotlib.lines.Line2D>`_ object with a
+    marker style set for creating custom legend entries with the :meth:`~graphinglib.SmartFigure.set_custom_legend`
+    method. All parameters are also available as properties.
+
+    Parameters
+    ----------
+    label : str
+        The label for the legend line.
+    face_color : ColorType
+        The color of the marker.
+    face_color_alt : ColorType, optional
+        The alternative face color of the marker (for markers with two colors).
+    edge_color : ColorType, optional
+        The color of the marker edge.
+    edge_width : float, optional
+        The width of the marker edge in points.
+        Typical range is ``0`` to ``3``.
+        Defaults to ``1.0``.
+    marker_size : float, optional
+        The size of the marker in points.
+        Typical range is ``4`` to ``12``.
+        Defaults to ``6.0``.
+    marker_style : Any, optional
+        The style of the marker, which can be `any marker style supported by Matplotlib
+        <https://matplotlib.org/stable/api/markers_api.html#matplotlib.markers.MarkerStyle>`_.
+        Values include ``"."``, ``","``, ``"o"``, ``"v"``, ``"^"``, ``"<"``, ``">"``, ``"s"``, ``"p"``,
+        ``"*"``, ``"h"``, ``"H"``, ``"+"``, ``"x"``, ``"D"``, ``"d"``, ``"|"``, and ``"_"``.
+        Defaults to ``"o"`` (circle).
+    fill_style : {"full", "left", "right", "bottom", "top"}, optional
+        The fill style of the marker.
+        Values are ``"full"``, ``"left"``, ``"right"``, ``"bottom"``, and ``"top"``.
+        Defaults to ``"full"``.
+    alpha : float, optional
+        The transparency level of the marker, between ``0`` (fully transparent) and ``1`` (fully opaque).
+        Defaults to ``1.0``.
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
     """
+
+    _face_color: Optional[ColorType]
+    _face_color_alt: Optional[ColorType]
+    _edge_color: Optional[ColorType]
+    _edge_width: float
+    _marker_size: float
+    _marker_style: Any
+    _fill_style: Literal["full", "left", "right", "bottom", "top"]
 
     def __init__(
         self,
@@ -291,36 +422,48 @@ class LegendMarker(LegendElement):
         Returns the Matplotlib Line2D artist that represents this legend marker.
         """
         return Line2D(
-            [], [], linestyle="none", label=self._label,
-            markerfacecolor=self._face_color if self._face_color is not None else "none",
-            markerfacecoloralt=self._face_color_alt if self._face_color_alt is not None else "none",
-            markeredgecolor=self._edge_color if self._edge_color is not None else "none",
-            markeredgewidth=self._edge_width, markersize=self._marker_size, marker=self._marker_style,
-            fillstyle=(self._fill_style if self._fill_style is not None else "none"), alpha=self._alpha,
+            [],
+            [],
+            linestyle="none",
+            label=self._label,
+            markerfacecolor=self._face_color
+            if self._face_color is not None
+            else "none",
+            markerfacecoloralt=self._face_color_alt
+            if self._face_color_alt is not None
+            else "none",
+            markeredgecolor=self._edge_color
+            if self._edge_color is not None
+            else "none",
+            markeredgewidth=self._edge_width,
+            markersize=self._marker_size,
+            marker=self._marker_style,
+            fillstyle=(self._fill_style if self._fill_style is not None else "none"),
+            alpha=self._alpha,
         )
 
     @property
-    def face_color(self) -> ColorType:
+    def face_color(self) -> Optional[ColorType]:
         return self._face_color
 
     @face_color.setter
-    def face_color(self, value: ColorType) -> None:
+    def face_color(self, value: Optional[ColorType]) -> None:
         self._color_setter("face_color", value)
 
     @property
-    def face_color_alt(self) -> ColorType:
+    def face_color_alt(self) -> Optional[ColorType]:
         return self._face_color_alt
 
     @face_color_alt.setter
-    def face_color_alt(self, value: ColorType) -> None:
+    def face_color_alt(self, value: Optional[ColorType]) -> None:
         self._color_setter("face_color_alt", value)
 
     @property
-    def edge_color(self) -> ColorType:
+    def edge_color(self) -> Optional[ColorType]:
         return self._edge_color
 
     @edge_color.setter
-    def edge_color(self, value: ColorType) -> None:
+    def edge_color(self, value: Optional[ColorType]) -> None:
         self._color_setter("edge_color", value)
 
     @property
@@ -348,7 +491,7 @@ class LegendMarker(LegendElement):
         try:
             MarkerStyle(value)  # Validate the marker style
         except Exception:
-            raise ValueError(f"'{value}' is not a valid marker style.")
+            raise InvalidParameterError(f"'{value}' is not a valid marker style.")
         self._marker_style = value
 
     @property
@@ -356,10 +499,12 @@ class LegendMarker(LegendElement):
         return self._fill_style
 
     @fill_style.setter
-    def fill_style(self, value: Literal["full", "left", "right", "bottom", "top"]) -> None:
+    def fill_style(
+        self, value: Literal["full", "left", "right", "bottom", "top"]
+    ) -> None:
         if value is not None:
             if value not in MarkerStyle.fillstyles:
-                raise ValueError(f"'{value}' is not a valid fill style.")
+                raise InvalidParameterError(f"'{value}' is not a valid fill style.")
         self._fill_style = value
 
 
@@ -367,8 +512,49 @@ class LegendPatch(LegendElement):
     """
     This class implements a legend patch wrapping the
     `Patch <https://matplotlib.org/stable/api/_as_gen/matplotlib.patches.Patch.html#matplotlib.patches.Patch>`_ object
-    for creating custom legend entries with the :meth:`:~graphinglib.smart_figure.SmartFigure.set_custom_legend` method.
+    for creating custom legend entries with the :meth:`~graphinglib.SmartFigure.set_custom_legend` method. All
+    parameters are also available as properties.
+
+    Parameters
+    ----------
+    label : str
+        The label for the legend patch.
+    face_color : ColorType
+        The face color of the patch.
+    edge_color : ColorType, optional
+        The edge color of the patch.
+    line_width : float, optional
+        The width of the patch edge and hatch (if present) in points.
+        Typical range is ``0.5`` to ``4``.
+        Defaults to ``1.0``.
+    line_style : {"-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"} or tuple of float and sequence, optional
+        The style of the patch edge, which can be `any pattern supported by Matplotlib
+        <https://matplotlib.org/stable/api/_as_gen/matplotlib.patches.Patch.html#matplotlib.patches.Patch.set_linestyle>`_.
+        Defaults to ``"-"`` (solid line).
+    hatch : {"/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"}, optional
+        The hatch pattern of the patch, which can be `any hatch pattern supported by Matplotlib
+        <https://matplotlib.org/stable/api/_as_gen/matplotlib.patches.Patch.html#matplotlib.patches.Patch.set_hatch>`_.
+        Values include ``"/"``, ``"\\"``, ``"|"``, ``"-"``, ``"+"``, ``"x"``, ``"o"``, ``"O"``, ``"."``, and
+        ``"*"``.
+    alpha : float, optional
+        The transparency level of the patch, between ``0`` (fully transparent) and ``1`` (fully opaque).
+        Defaults to ``1.0``.
+
+    Notes
+    -----
+    Color parameters accept Matplotlib color formats: named colors (``"blue"``), short color strings
+    (``"b"``), hex strings (``"#0000ff"``), grayscale strings (``"0.5"``), and RGB/RGBA tuples with
+    values between ``0`` and ``1`` (``(0, 0, 1)`` or ``(0, 0, 1, 0.5)``).
     """
+
+    _face_color: Optional[ColorType]
+    _edge_color: Optional[ColorType]
+    _line_width: float
+    _line_style: (
+        Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]
+        | tuple[float, Sequence]
+    )
+    _hatch: Optional[Literal["/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"]]
 
     def __init__(
         self,
@@ -376,9 +562,13 @@ class LegendPatch(LegendElement):
         face_color: Optional[ColorType] = None,
         edge_color: Optional[ColorType] = None,
         line_width: float = 1.0,
-        line_style: Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]
-                    | tuple[float, Sequence] = "-",
-        hatch: Literal["/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"] = None,
+        line_style: Literal[
+            "-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"
+        ]
+        | tuple[float, Sequence] = "-",
+        hatch: Optional[
+            Literal["/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"]
+        ] = None,
         alpha: float = 1.0,
     ) -> None:
         self.label = label
@@ -394,26 +584,31 @@ class LegendPatch(LegendElement):
         """
         Returns the Matplotlib Patch artist that represents this legend patch.
         """
-        return Patch(label=self._label,
-                     facecolor=(self._face_color if self._face_color is not None else "none"),
-                     edgecolor=(self._edge_color if self._edge_color is not None else "none"),
-                     linewidth=self._line_width, linestyle=self._line_style, hatch=self._hatch, alpha=self._alpha,
-                     fill=(self._face_color is not None))
+        return Patch(
+            label=self._label,
+            facecolor=(self._face_color if self._face_color is not None else "none"),
+            edgecolor=(self._edge_color if self._edge_color is not None else "none"),
+            linewidth=self._line_width,
+            linestyle=self._line_style,
+            hatch=self._hatch,
+            alpha=self._alpha,
+            fill=(self._face_color is not None),
+        )
 
     @property
-    def face_color(self) -> ColorType:
+    def face_color(self) -> Optional[ColorType]:
         return self._face_color
 
     @face_color.setter
-    def face_color(self, value: ColorType) -> None:
+    def face_color(self, value: Optional[ColorType]) -> None:
         self._color_setter("face_color", value)
 
     @property
-    def edge_color(self) -> ColorType:
+    def edge_color(self) -> Optional[ColorType]:
         return self._edge_color
 
     @edge_color.setter
-    def edge_color(self, value: ColorType) -> None:
+    def edge_color(self, value: Optional[ColorType]) -> None:
         self._color_setter("edge_color", value)
 
     @property
@@ -425,25 +620,37 @@ class LegendPatch(LegendElement):
         self._number_setter("line_width", value)
 
     @property
-    def line_style(self) -> Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"] \
-                            | tuple[float, Sequence]:
+    def line_style(
+        self,
+    ) -> (
+        Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]
+        | tuple[float, Sequence]
+    ):
         return self._line_style
 
     @line_style.setter
-    def line_style(self, value: Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"] \
-                                | tuple[float, Sequence]) -> None:
+    def line_style(
+        self,
+        value: Literal["-", "--", "-.", ":", "solid", "dashed", "dashdot", "dotted"]
+        | tuple[float, Sequence],
+    ) -> None:
         self._line_style_setter("line_style", value)
 
     @property
-    def hatch(self) -> Literal["/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"]:
+    def hatch(
+        self,
+    ) -> Optional[Literal["/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"]]:
         return self._hatch
 
     @hatch.setter
-    def hatch(self, value: Literal["/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"]) -> None:
+    def hatch(
+        self,
+        value: Optional[Literal["/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"]],
+    ) -> None:
         if value is not None:
             # This logic is adapted from matplotlib's hatch validation
             valid_hatch_patterns = set(r"-+|/\xXoO.*")
             invalids = set(value).difference(valid_hatch_patterns)
             if invalids:
-                raise ValueError(f"Invalid hatch pattern(s): {invalids}")
+                raise InvalidParameterError(f"Invalid hatch pattern(s): {invalids}")
         self._hatch = value
